@@ -14,7 +14,6 @@ services:
       - PORT=3000
       - APP_URL=https://books.mafede.i234.me
       - JWT_SECRET=cambiar_por_un_secreto_seguro_y_largo
-      - GEMINI_API_KEY=tu_api_key_de_gemini
       - DB_PATH=/app/data/library.db
     volumes:
       - /volume1/docker/bookreminder/data:/app/data
