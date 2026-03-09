@@ -166,7 +166,7 @@ export default function Dashboard() {
       reader.onload = async (event) => {
         const content = event.target?.result as string;
         try {
-          const analysis = await analyzeBook(content || "Contenido de prueba para el libro: " + file.name);
+          const analysis = await analyzeBook(content || "Contenido de prueba para el libro: " + file.name, token || "");
           
           const saveRes = await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
             method: 'POST',

@@ -6,8 +6,22 @@ import crypto from "crypto";
 import db from "./db";
 import { authMiddleware, generateToken } from "./auth";
 import { sendEmail } from "./mailer";
+import { analyzeBookBackend } from "./gemini";
 
 const router = Router();
+
+// --- GEMINI ANALYSIS ---
+router.post("/analyze", authMiddleware, async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: "Content is required" });
+    const analysis = await analyzeBookBackend(content);
+    res.json(analysis);
+  } catch (err: any) {
+    console.error("Error analyzing book:", err);
+    res.status(500).json({ error: "Error analyzing book" });
+  }
+});
 
 // --- AUTHENTICATION ---
 
