@@ -12,14 +12,24 @@ const router = Router();
 
 // --- GEMINI ANALYSIS ---
 router.post("/analyze", authMiddleware, async (req, res) => {
+  console.log("[API /analyze] Request received");
   try {
     const { content } = req.body;
-    if (!content) return res.status(400).json({ error: "Content is required" });
+    if (!content) {
+      console.log("[API /analyze] Error: Content is missing in the request body");
+      return res.status(400).json({ error: "Content is required" });
+    }
+    
+    console.log(`[API /analyze] Content received, length: ${content.length} characters`);
+    console.log("[API /analyze] Calling analyzeBookBackend...");
+    
     const analysis = await analyzeBookBackend(content);
+    
+    console.log("[API /analyze] Analysis completed successfully");
     res.json(analysis);
   } catch (err: any) {
-    console.error("Error analyzing book:", err);
-    res.status(500).json({ error: "Error analyzing book" });
+    console.error("[API /analyze] Error analyzing book:", err);
+    res.status(500).json({ error: "Error analyzing book", details: err.message });
   }
 });
 
