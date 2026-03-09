@@ -1,5 +1,3 @@
-import nodemailer from 'nodemailer';
-
 export const sendEmail = async (to: string, subject: string, html: string) => {
   const emailUrl = process.env.CENTRAL_EMAIL_URL;
   const emailKey = process.env.CENTRAL_EMAIL_KEY;
