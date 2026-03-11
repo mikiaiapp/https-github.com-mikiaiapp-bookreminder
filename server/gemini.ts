@@ -28,83 +28,84 @@ export const analyzeBookBackend = async (content: string) => {
   
   const ai = new GoogleGenAI({ apiKey });
   const model = "gemini-3-flash-preview";
-  const CHUNK_SIZE = 500000; // ~125k-150k tokens, well within 250k TPM limit
+  const CHUNK_SIZE = 400000; // ~100k tokens, safe for 250k TPM limit
+  
+  const totalLength = content.length;
+  const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
+  
+  console.log(`[Gemini Backend] Content size (${totalLength}) requires ${numChunks} chunks.`);
 
-  if (content.length <= CHUNK_SIZE) {
-    console.log(`[Gemini Backend] Content size (${content.length}) is within limits. Single pass analysis.`);
-    return await runAnalysis(ai, model, content);
+  let finalAnalysis: any = null;
+  let accumulatedSummary = "";
+  let accumulatedDetailedSummary = "";
+
+  for (let i = 0; i < numChunks; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, totalLength);
+    const chunk = content.substring(start, end);
+    const isLast = i === numChunks - 1;
+
+    console.log(`[Gemini Backend] Processing chunk ${i + 1}/${numChunks} (${chunk.length} chars)...`);
+
+    if (i > 0) {
+      console.log("[Gemini Backend] Waiting 35 seconds for quota reset...");
+      await new Promise(resolve => setTimeout(resolve, 35000));
+    }
+
+    const prompt = i === 0 
+      ? `Analiza la PRIMERA PARTE de este libro. Extrae la ficha técnica y empieza el resumen detallado.
+         CONTENIDO: ${chunk}`
+      : `Estás analizando la PARTE ${i + 1} de un libro. 
+         RESUMEN ANTERIOR: ${accumulatedSummary}
+         CONTENIDO ACTUAL: ${chunk}
+         ${isLast ? "Esta es la PARTE FINAL. Cierra todas las tramas, evoluciones de personajes y genera los guiones de podcast definitivos." : "Continúa el resumen detallado de los capítulos."}`;
+
+    const currentAnalysis = await runAnalysis(ai, model, prompt, `PARTE ${i + 1}`);
+
+    if (i === 0) {
+      finalAnalysis = currentAnalysis;
+      accumulatedSummary = currentAnalysis.resumen_general;
+      accumulatedDetailedSummary = currentAnalysis.resumen_detallado_capitulos;
+    } else {
+      accumulatedSummary = currentAnalysis.resumen_general;
+      accumulatedDetailedSummary += "\n\n" + currentAnalysis.resumen_detallado_capitulos;
+      
+      // Update final object with latest data from current chunk
+      finalAnalysis = {
+        ...finalAnalysis,
+        resumen_general: currentAnalysis.resumen_general,
+        resumen_detallado_capitulos: accumulatedDetailedSummary,
+        analisis_personajes: currentAnalysis.analisis_personajes,
+        evolucion_protagonista: currentAnalysis.evolucion_protagonista,
+        mermaid_code: currentAnalysis.mermaid_code,
+        guion_podcast_personajes: currentAnalysis.guion_podcast_personajes,
+        guion_podcast_libro: currentAnalysis.guion_podcast_libro
+      };
+    }
   }
 
-  console.log(`[Gemini Backend] Content size (${content.length}) exceeds limits. Starting multi-part analysis...`);
-  
-  // PHASE 1: Analyze first part
-  const part1 = content.substring(0, CHUNK_SIZE);
-  console.log("[Gemini Backend] Phase 1: Analyzing first 500k characters...");
-  const analysis1 = await runAnalysis(ai, model, part1, "PRIMERA PARTE");
-
-  // Wait 10 seconds to let the TPM (Tokens Per Minute) quota breathe
-  console.log("[Gemini Backend] Waiting 10 seconds for quota reset...");
-  await new Promise(resolve => setTimeout(resolve, 10000));
-
-  // PHASE 2: Analyze second part (Final)
-  const part2 = content.substring(CHUNK_SIZE);
-  console.log(`[Gemini Backend] Phase 2: Analyzing remaining ${part2.length} characters...`);
-  
-  const prompt2 = `
-Actúas como el motor lógico de "Mi Biblioteca Personal NAS". Estás analizando la SEGUNDA PARTE de un libro.
-Ya has analizado la primera parte y este es el resumen de lo ocurrido hasta ahora:
-${analysis1.resumen_general}
-
-### CONTENIDO DE LA SEGUNDA PARTE (FINAL DEL LIBRO):
-${part2.substring(0, CHUNK_SIZE)}
-
-### TU MISIÓN EN ESTA FASE:
-1. Completa el "RESUMEN DETALLADO POR CAPÍTULOS" desde donde se quedó la primera parte hasta el FINAL ABSOLUTO.
-2. Genera el "RESUMEN GENERAL" definitivo que cubra TODA la obra (inicio, nudo y desenlace).
-3. Actualiza la "EVOLUCIÓN DEL PROTAGONISTA" y "ANÁLISIS DE PERSONAJES" con lo ocurrido en el final.
-4. Genera los "GUIONES DE PODCAST" y el "MAPA MERMAID" basados en la obra COMPLETA.
-
-### RESTRICCIONES TÉCNICAS:
-- Idioma: Español de España.
-- Responde ÚNICAMENTE en JSON con la misma estructura.
-`;
-
-  const analysis2 = await runAnalysis(ai, model, prompt2, "SEGUNDA PARTE (FINAL)");
-
-  // MERGE RESULTS
-  console.log("[Gemini Backend] Merging analysis results...");
-  return {
-    ...analysis1,
-    resumen_general: analysis2.resumen_general,
-    resumen_detallado_capitulos: analysis1.resumen_detallado_capitulos + "\n\n" + analysis2.resumen_detallado_capitulos,
-    analisis_personajes: analysis2.analisis_personajes,
-    evolucion_protagonista: analysis2.evolucion_protagonista,
-    mermaid_code: analysis2.mermaid_code,
-    guion_podcast_personajes: analysis2.guion_podcast_personajes,
-    guion_podcast_libro: analysis2.guion_podcast_libro
-  };
+  return finalAnalysis;
 };
 
-async function runAnalysis(ai: any, model: string, text: string, phaseName: string = "ANALYSIS") {
-  const prompt = phaseName === "ANALYSIS" ? `
-Actúas como el motor lógico de "Mi Biblioteca Personal NAS", un sistema de gestión del conocimiento (PKM). Tu misión es analizar el siguiente contenido de libro y devolver información estructurada exclusivamente en formato JSON.
+async function runAnalysis(ai: any, model: string, text: string, phaseName: string) {
+  const prompt = `
+Actúas como el motor lógico de "Mi Biblioteca Personal NAS". Tu misión es analizar el contenido proporcionado y devolver un JSON estructurado.
 
-### CONTENIDO DEL LIBRO:
 ${text}
 
-### REGLAS DE ANÁLISIS (MODO SPOILER TOTAL):
-1. FICHA TÉCNICA: Extrae el título, autor, ISBN (si lo encuentras, si no, busca el ISBN real de este libro), una sinopsis atractiva, biografía del autor, bibliografía destacada del autor y datos de publicación (año, género, editorial).
-2. RESUMEN GENERAL: Crea un resumen genérico del libro entero, capturando la esencia, trama principal y conclusión.
-3. RESUMEN DETALLADO POR CAPÍTULOS: Crea un desglose EXTREMADAMENTE DETALLADO capítulo a capítulo. Es OBLIGATORIO incluir spoilers, finales, giros de guion, revelaciones y detalles minuciosos.
-4. PERSONAJES: Analiza su psicología, motivaciones y su arco de evolución.
-5. MAPA DE IDEAS: Genera código funcional en formato Mermaid.js.
-6. PODCASTS: Redacta dos guiones dinámicos en español de España.
+### REGLAS:
+1. FICHA TÉCNICA: Título, autor, ISBN, sinopsis, biografía, bibliografía, datos publicación.
+2. RESUMEN GENERAL: Esencia completa de la obra (si es la parte final, incluye el desenlace).
+3. RESUMEN DETALLADO: Desglose capítulo a capítulo con spoilers y detalles minuciosos.
+4. PERSONAJES: Psicología y evolución.
+5. MAPA MERMAID: Código funcional.
+6. PODCASTS: Dos guiones dinámicos.
 
-### RESTRICCIONES TÉCNICAS:
+### RESTRICCIONES:
 - Idioma: Español de España.
 - Salida: JSON puro.
-- Estructura JSON: { "titulo": "", "autor": "", "isbn": "", "sinopsis": "", "biografia_autor": "", "bibliografia_autor": "", "datos_publicacion": "", "resumen_general": "", "resumen_detallado_capitulos": "", "resumen_capitulos": "", "analisis_personajes": "", "evolucion_protagonista": "", "mermaid_code": "", "guion_podcast_personajes": "", "guion_podcast_libro": "" }
-` : text;
+- Estructura: { "titulo": "", "autor": "", "isbn": "", "sinopsis": "", "biografia_autor": "", "bibliografia_autor": "", "datos_publicacion": "", "resumen_general": "", "resumen_detallado_capitulos": "", "resumen_capitulos": "", "analisis_personajes": "", "evolucion_protagonista": "", "mermaid_code": "", "guion_podcast_personajes": "", "guion_podcast_libro": "" }
+`;
 
   try {
     const response = await ai.models.generateContent({
