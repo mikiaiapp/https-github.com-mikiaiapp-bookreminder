@@ -141,25 +141,44 @@ ${promptText}
 - Salida: JSON puro.
 `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model,
-      contents: [{ parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: schemaProperties,
-          required: Object.keys(schemaProperties)
-        }
-      }
-    });
+  const MAX_RETRIES = 3;
+  let lastError: any = null;
 
-    const resultText = response.text;
-    if (!resultText) throw new Error(`No response from Gemini in ${phaseName}`);
-    return JSON.parse(resultText);
-  } catch (error: any) {
-    console.error(`[Gemini Backend] Error in ${phaseName}:`, error);
-    throw error;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: schemaProperties,
+            required: Object.keys(schemaProperties)
+          }
+        }
+      });
+
+      const resultText = response.text;
+      if (!resultText) throw new Error(`No response from Gemini in ${phaseName}`);
+      return JSON.parse(resultText);
+    } catch (error: any) {
+      lastError = error;
+      // 503: Service Unavailable (High demand)
+      // 429: Quota Exceeded
+      const isRetryable = error.status === 503 || error.status === 429 || 
+                          (error.message && (error.message.includes("503") || error.message.includes("429")));
+      
+      if (isRetryable && attempt < MAX_RETRIES) {
+        const delay = attempt * 30000; // 30s, 60s...
+        console.warn(`[Gemini Backend] Attempt ${attempt} failed for ${phaseName} (Status: ${error.status}). Retrying in ${delay/1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      console.error(`[Gemini Backend] Error in ${phaseName} after ${attempt} attempts:`, error);
+      throw error;
+    }
   }
+  throw lastError;
 }
