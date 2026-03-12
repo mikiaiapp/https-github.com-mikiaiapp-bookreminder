@@ -111,4 +111,11 @@ for (const col of newColumns) {
   }
 }
 
+// Migration for analysis_jobs message column
+try {
+  db.prepare("SELECT message FROM analysis_jobs LIMIT 1").get();
+} catch (e) {
+  db.exec("ALTER TABLE analysis_jobs ADD COLUMN message TEXT");
+}
+
 export default db;
