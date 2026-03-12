@@ -35,6 +35,7 @@ export default function Dashboard() {
   const [selectedBook, setSelectedBook] = useState<SavedBook | null>(null);
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'ficha' | 'resumen' | 'personajes' | 'mapa' | 'podcasts'>('ficha');
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -166,7 +167,11 @@ export default function Dashboard() {
       reader.onload = async (event) => {
         const content = event.target?.result as string;
         try {
-          const analysis = await analyzeBook(content || "Contenido de prueba para el libro: " + file.name, token || "");
+          const analysis = await analyzeBook(
+            content || "Contenido de prueba para el libro: " + file.name, 
+            token || "",
+            (progress) => setAnalysisProgress(progress)
+          );
           
           const saveRes = await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
             method: 'POST',
@@ -355,11 +360,19 @@ export default function Dashboard() {
               </div>
             )}
             {isAnalyzing && (
-              <div className="p-4 border-b border-[#141414] bg-[#141414]/50 animate-pulse">
-                <div className="flex items-center gap-3">
+              <div className="p-4 border-b border-[#141414] bg-[#141414]/50">
+                <div className="flex items-center gap-3 mb-2">
                   <Loader2 className="w-4 h-4 animate-spin text-[#F27D26]" />
                   <span className="text-xs font-mono text-[#F27D26] uppercase">Procesando con IA...</span>
                 </div>
+                <div className="w-full bg-[#1A1A1A] h-1 rounded-full overflow-hidden">
+                  <motion.div 
+                    className="h-full bg-[#F27D26]"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${analysisProgress}%` }}
+                  />
+                </div>
+                <p className="text-[9px] font-mono text-[#555] mt-1 text-right">{analysisProgress}%</p>
               </div>
             )}
           </div>

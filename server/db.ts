@@ -78,6 +78,15 @@ db.exec(`
     expires_at DATETIME NOT NULL,
     FOREIGN KEY (library_id) REFERENCES libraries(id)
   );
+
+  CREATE TABLE IF NOT EXISTS analysis_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL, -- 'pending', 'processing', 'completed', 'failed'
+    progress INTEGER DEFAULT 0,
+    result TEXT,
+    error TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Add library_id to books if it doesn't exist (migration for existing data)

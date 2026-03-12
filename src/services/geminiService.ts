@@ -16,7 +16,7 @@ export interface BookAnalysis {
   guion_podcast_libro: string;
 }
 
-export const analyzeBook = async (content: string, token: string): Promise<BookAnalysis> => {
+export const analyzeBook = async (content: string, token: string, onProgress?: (progress: number) => void): Promise<BookAnalysis> => {
   const response = await fetch('/api/analyze', {
     method: 'POST',
     headers: {
@@ -28,8 +28,38 @@ export const analyzeBook = async (content: string, token: string): Promise<BookA
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || "Error analyzing book via backend");
+    throw new Error(errorData.error || "Error starting analysis");
   }
 
-  return response.json();
+  const { jobId } = await response.json();
+
+  // Polling
+  return new Promise((resolve, reject) => {
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/analysis-status/${jobId}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        
+        if (!res.ok) throw new Error("Error checking status");
+        
+        const data = await res.json();
+        
+        if (onProgress && data.progress !== undefined) {
+          onProgress(data.progress);
+        }
+
+        if (data.status === 'completed') {
+          resolve(data.result);
+        } else if (data.status === 'failed') {
+          reject(new Error(data.error || "Analysis failed"));
+        } else {
+          setTimeout(poll, 3000); // Poll every 3 seconds
+        }
+      } catch (err) {
+        reject(err);
+      }
+    };
+    poll();
+  });
 };

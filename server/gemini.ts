@@ -2,8 +2,10 @@ import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import path from "path";
 
-export const analyzeBookBackend = async (content: string) => {
+export const analyzeBookBackend = async (content: string, onProgress?: (progress: number) => void) => {
   console.log("[Gemini Backend] Initializing GoogleGenAI...");
+  
+  if (onProgress) onProgress(5);
   
   let apiKey = process.env.GEMINI_API_KEY || "";
   
@@ -45,6 +47,8 @@ export const analyzeBookBackend = async (content: string) => {
     datos_publicacion: { type: Type.STRING },
   });
 
+  if (onProgress) onProgress(15);
+
   // 2. ANÁLISIS POR BLOQUES (CAPÍTULOS Y PERSONAJES)
   const CHUNK_SIZE = 350000; // Bloques más pequeños para evitar saturación
   const totalLength = content.length;
@@ -80,6 +84,11 @@ export const analyzeBookBackend = async (content: string) => {
 
     allChapterSummaries += "\n\n" + chunkResult.resumen_capitulos;
     allCharacterNotes += "\n\n" + chunkResult.notas_personajes;
+
+    if (onProgress) {
+      const chunkProgress = 15 + Math.floor(((i + 1) / numChunks) * 60);
+      onProgress(chunkProgress);
+    }
   }
 
   // 3. SÍNTESIS FINAL
@@ -109,6 +118,8 @@ export const analyzeBookBackend = async (content: string) => {
     guion_podcast_personajes: { type: Type.STRING },
     guion_podcast_libro: { type: Type.STRING },
   });
+
+  if (onProgress) onProgress(100);
 
   // 4. ENSAMBLAJE FINAL
   return {

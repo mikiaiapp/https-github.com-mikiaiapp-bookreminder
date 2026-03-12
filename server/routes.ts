@@ -16,20 +16,42 @@ router.post("/analyze", authMiddleware, async (req, res) => {
   try {
     const { content } = req.body;
     if (!content) {
-      console.log("[API /analyze] Error: Content is missing in the request body");
       return res.status(400).json({ error: "Content is required" });
     }
     
-    console.log(`[API /analyze] Content received, length: ${content.length} characters`);
-    console.log("[API /analyze] Calling analyzeBookBackend...");
+    const jobId = crypto.randomUUID();
+    db.prepare("INSERT INTO analysis_jobs (id, status, progress) VALUES (?, ?, ?)").run(jobId, 'processing', 0);
     
-    const analysis = await analyzeBookBackend(content);
-    
-    console.log("[API /analyze] Analysis completed successfully");
-    res.json(analysis);
+    // Start analysis in background
+    (async () => {
+      try {
+        const analysis = await analyzeBookBackend(content, (progress) => {
+          db.prepare("UPDATE analysis_jobs SET progress = ? WHERE id = ?").run(progress, jobId);
+        });
+        db.prepare("UPDATE analysis_jobs SET status = ?, progress = 100, result = ? WHERE id = ?").run('completed', JSON.stringify(analysis), jobId);
+      } catch (err: any) {
+        console.error(`[Job ${jobId}] Error:`, err);
+        db.prepare("UPDATE analysis_jobs SET status = ?, error = ? WHERE id = ?").run('failed', err.message, jobId);
+      }
+    })();
+
+    res.json({ jobId });
   } catch (err: any) {
-    console.error("[API /analyze] Error analyzing book:", err);
-    res.status(500).json({ error: "Error analyzing book", details: err.message });
+    console.error("[API /analyze] Error starting job:", err);
+    res.status(500).json({ error: "Error starting analysis" });
+  }
+});
+
+router.get("/analysis-status/:jobId", authMiddleware, (req, res) => {
+  const job = db.prepare("SELECT * FROM analysis_jobs WHERE id = ?").get(req.params.jobId) as any;
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  
+  if (job.status === 'completed') {
+    res.json({ status: job.status, progress: job.progress, result: JSON.parse(job.result) });
+  } else if (job.status === 'failed') {
+    res.json({ status: job.status, progress: job.progress, error: job.error });
+  } else {
+    res.json({ status: job.status, progress: job.progress });
   }
 });
 
