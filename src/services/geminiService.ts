@@ -16,7 +16,7 @@ export interface BookAnalysis {
   guion_podcast_libro: string;
 }
 
-export const analyzeBook = async (content: string, token: string, onProgress?: (progress: number) => void): Promise<BookAnalysis> => {
+export const analyzeBook = async (content: string, token: string, onProgress?: (progress: number, message: string) => void): Promise<BookAnalysis> => {
   const response = await fetch('/api/analyze', {
     method: 'POST',
     headers: {
@@ -45,8 +45,8 @@ export const analyzeBook = async (content: string, token: string, onProgress?: (
         
         const data = await res.json();
         
-        if (onProgress && data.progress !== undefined) {
-          onProgress(data.progress);
+        if (onProgress && data.progress !== undefined && data.message !== undefined) {
+          onProgress(data.progress, data.message);
         }
 
         if (data.status === 'completed') {

@@ -36,6 +36,7 @@ export default function Dashboard() {
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisMessage, setAnalysisMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'ficha' | 'resumen' | 'personajes' | 'mapa' | 'podcasts'>('ficha');
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -170,7 +171,10 @@ export default function Dashboard() {
           const analysis = await analyzeBook(
             content || "Contenido de prueba para el libro: " + file.name, 
             token || "",
-            (progress) => setAnalysisProgress(progress)
+            (progress, message) => {
+              setAnalysisProgress(progress);
+              setAnalysisMessage(message);
+            }
           );
           
           const saveRes = await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
@@ -188,11 +192,14 @@ export default function Dashboard() {
           const newBook = { ...analysis, id, created_at: new Date().toISOString() };
           setBooks([newBook, ...books]);
           setSelectedBook(newBook);
-        } catch (err) {
-          setError("Error analizando el libro. Por favor, inténtalo de nuevo.");
+          setSuccessMsg('Análisis completado y guardado con éxito');
+        } catch (err: any) {
+          setError(err.message || "Error analizando el libro. Por favor, inténtalo de nuevo.");
           console.error(err);
         } finally {
           setIsAnalyzing(false);
+          setAnalysisProgress(0);
+          setAnalysisMessage('');
         }
       };
       reader.readAsText(file);
@@ -372,7 +379,10 @@ export default function Dashboard() {
                     animate={{ width: `${analysisProgress}%` }}
                   />
                 </div>
-                <p className="text-[9px] font-mono text-[#555] mt-1 text-right">{analysisProgress}%</p>
+                <div className="flex justify-between mt-1">
+                  <p className="text-[9px] font-mono text-[#F27D26] uppercase truncate max-w-[180px]">{analysisMessage}</p>
+                  <p className="text-[9px] font-mono text-[#555]">{analysisProgress}%</p>
+                </div>
               </div>
             )}
           </div>

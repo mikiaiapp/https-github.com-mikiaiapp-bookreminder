@@ -83,6 +83,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL, -- 'pending', 'processing', 'completed', 'failed'
     progress INTEGER DEFAULT 0,
+    message TEXT,
     result TEXT,
     error TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP

@@ -2,10 +2,10 @@ import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import path from "path";
 
-export const analyzeBookBackend = async (content: string, onProgress?: (progress: number) => void) => {
+export const analyzeBookBackend = async (content: string, onProgress?: (progress: number, message: string) => void) => {
   console.log("[Gemini Backend] Initializing GoogleGenAI...");
   
-  if (onProgress) onProgress(5);
+  if (onProgress) onProgress(5, "Inicializando motor de IA...");
   
   let apiKey = process.env.GEMINI_API_KEY || "";
   
@@ -47,10 +47,10 @@ export const analyzeBookBackend = async (content: string, onProgress?: (progress
     datos_publicacion: { type: Type.STRING },
   });
 
-  if (onProgress) onProgress(15);
+  if (onProgress) onProgress(15, "Ficha técnica extraída. Analizando capítulos...");
 
   // 2. ANÁLISIS POR BLOQUES (CAPÍTULOS Y PERSONAJES)
-  const CHUNK_SIZE = 350000; // Bloques más pequeños para evitar saturación
+  const CHUNK_SIZE = 1000000; // Aumentamos a 1M para reducir peticiones (Gemini 3 Flash tiene 1M+ de contexto)
   const totalLength = content.length;
   const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
   
@@ -87,7 +87,7 @@ export const analyzeBookBackend = async (content: string, onProgress?: (progress
 
     if (onProgress) {
       const chunkProgress = 15 + Math.floor(((i + 1) / numChunks) * 60);
-      onProgress(chunkProgress);
+      onProgress(chunkProgress, `Analizado bloque ${i + 1} de ${numChunks}...`);
     }
   }
 
@@ -119,7 +119,7 @@ export const analyzeBookBackend = async (content: string, onProgress?: (progress
     guion_podcast_libro: { type: Type.STRING },
   });
 
-  if (onProgress) onProgress(100);
+  if (onProgress) onProgress(100, "Análisis completado con éxito.");
 
   // 4. ENSAMBLAJE FINAL
   return {
@@ -174,6 +174,10 @@ ${promptText}
         console.warn(`[Gemini Backend] Attempt ${attempt} failed for ${phaseName} (Status: ${error.status}). Retrying in ${delay/1000}s...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
+      }
+      
+      if (error.status === 429 && error.message.includes("Quota exceeded")) {
+        throw new Error("Cuota diaria de Gemini agotada (Límite: 20 peticiones/día). Por favor, espera 24h o usa otra API Key.");
       }
       
       console.error(`[Gemini Backend] Error in ${phaseName} after ${attempt} attempts:`, error);
