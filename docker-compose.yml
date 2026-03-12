@@ -7,14 +7,14 @@ services:
     restart: unless-stopped
     ports:
       - "5000:3000"
-    env_file:
-      - .env
     environment:
       - NODE_ENV=production
       - PORT=3000
       - APP_URL=https://books.mafede.i234.me
       - JWT_SECRET=cambiar_por_un_secreto_seguro_y_largo
       - DB_PATH=/app/data/library.db
-      - GEMINI_API_KEY=
+      - CENTRAL_EMAIL_URL=https://cartero.mafede.i234.me
+      - CENTRAL_EMAIL_KEY=mikiaiapp
+      - GEMINI_API_KEY= # Se carga desde /app/data/gemini_key.txt si está disponible
     volumes:
       - /volume1/docker/bookreminder/data:/app/data

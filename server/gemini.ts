@@ -28,83 +28,106 @@ export const analyzeBookBackend = async (content: string) => {
   
   const ai = new GoogleGenAI({ apiKey });
   const model = "gemini-3-flash-preview";
-  const CHUNK_SIZE = 400000; // ~100k tokens, safe for 250k TPM limit
   
+  // 1. EXTRAER METADATOS (FICHA TÉCNICA)
+  console.log("[Gemini Backend] Phase 1: Extracting Book Metadata...");
+  const metadataPrompt = `Analiza el inicio de este libro y extrae la FICHA TÉCNICA COMPLETA. 
+  Incluye: Título, Autor, ISBN, Sinopsis, Biografía detallada del autor, Bibliografía destacada y datos de publicación.
+  CONTENIDO INICIAL: ${content.substring(0, 100000)}`;
+  
+  const metadata = await runAnalysis(ai, model, metadataPrompt, "METADATOS", {
+    titulo: { type: Type.STRING },
+    autor: { type: Type.STRING },
+    isbn: { type: Type.STRING },
+    sinopsis: { type: Type.STRING },
+    biografia_autor: { type: Type.STRING },
+    bibliografia_autor: { type: Type.STRING },
+    datos_publicacion: { type: Type.STRING },
+  });
+
+  // 2. ANÁLISIS POR BLOQUES (CAPÍTULOS Y PERSONAJES)
+  const CHUNK_SIZE = 350000; // Bloques más pequeños para evitar saturación
   const totalLength = content.length;
   const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
   
-  console.log(`[Gemini Backend] Content size (${totalLength}) requires ${numChunks} chunks.`);
-
-  let finalAnalysis: any = null;
-  let accumulatedSummary = "";
-  let accumulatedDetailedSummary = "";
+  let allChapterSummaries = "";
+  let allCharacterNotes = "";
 
   for (let i = 0; i < numChunks; i++) {
     const start = i * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, totalLength);
     const chunk = content.substring(start, end);
-    const isLast = i === numChunks - 1;
 
-    console.log(`[Gemini Backend] Processing chunk ${i + 1}/${numChunks} (${chunk.length} chars)...`);
-
+    console.log(`[Gemini Backend] Phase 2: Analyzing chunk ${i + 1}/${numChunks}...`);
+    
     if (i > 0) {
-      console.log("[Gemini Backend] Waiting 35 seconds for quota reset...");
-      await new Promise(resolve => setTimeout(resolve, 35000));
+      console.log("[Gemini Backend] Waiting 45 seconds for quota reset...");
+      await new Promise(resolve => setTimeout(resolve, 45000));
     }
 
-    const prompt = i === 0 
-      ? `Analiza la PRIMERA PARTE de este libro. Extrae la ficha técnica y empieza el resumen detallado.
-         CONTENIDO: ${chunk}`
-      : `Estás analizando la PARTE ${i + 1} de un libro. 
-         RESUMEN ANTERIOR: ${accumulatedSummary}
-         CONTENIDO ACTUAL: ${chunk}
-         ${isLast ? "Esta es la PARTE FINAL. Cierra todas las tramas, evoluciones de personajes y genera los guiones de podcast definitivos." : "Continúa el resumen detallado de los capítulos."}`;
+    const chunkPrompt = `Estás analizando el fragmento ${i + 1} del libro "${metadata.titulo}".
+    Tu tarea es:
+    1. Hacer un resumen exhaustivo capítulo a capítulo de este fragmento.
+    2. Identificar personajes que aparecen y notas sobre su psicología/evolución en esta parte.
+    
+    CONTENIDO DEL FRAGMENTO:
+    ${chunk}`;
 
-    const currentAnalysis = await runAnalysis(ai, model, prompt, `PARTE ${i + 1}`);
+    const chunkResult = await runAnalysis(ai, model, chunkPrompt, `BLOQUE ${i + 1}`, {
+      resumen_capitulos: { type: Type.STRING, description: "Resumen detallado de los capítulos en este bloque" },
+      notas_personajes: { type: Type.STRING, description: "Notas sobre personajes y evolución en este bloque" }
+    });
 
-    if (i === 0) {
-      finalAnalysis = currentAnalysis;
-      accumulatedSummary = currentAnalysis.resumen_general;
-      accumulatedDetailedSummary = currentAnalysis.resumen_detallado_capitulos;
-    } else {
-      accumulatedSummary = currentAnalysis.resumen_general;
-      accumulatedDetailedSummary += "\n\n" + currentAnalysis.resumen_detallado_capitulos;
-      
-      // Update final object with latest data from current chunk
-      finalAnalysis = {
-        ...finalAnalysis,
-        resumen_general: currentAnalysis.resumen_general,
-        resumen_detallado_capitulos: accumulatedDetailedSummary,
-        analisis_personajes: currentAnalysis.analisis_personajes,
-        evolucion_protagonista: currentAnalysis.evolucion_protagonista,
-        mermaid_code: currentAnalysis.mermaid_code,
-        guion_podcast_personajes: currentAnalysis.guion_podcast_personajes,
-        guion_podcast_libro: currentAnalysis.guion_podcast_libro
-      };
-    }
+    allChapterSummaries += "\n\n" + chunkResult.resumen_capitulos;
+    allCharacterNotes += "\n\n" + chunkResult.notas_personajes;
   }
 
-  return finalAnalysis;
+  // 3. SÍNTESIS FINAL
+  console.log("[Gemini Backend] Phase 3: Synthesizing Final Analysis...");
+  console.log("[Gemini Backend] Waiting 45 seconds for final quota reset...");
+  await new Promise(resolve => setTimeout(resolve, 45000));
+
+  const synthesisPrompt = `Basándote en los siguientes resúmenes de capítulos y notas de personajes, genera el análisis final del libro "${metadata.titulo}".
+  
+  RESÚMENES DE CAPÍTULOS ACUMULADOS:
+  ${allChapterSummaries}
+  
+  NOTAS DE PERSONAJES ACUMULADAS:
+  ${allCharacterNotes}
+  
+  TAREAS FINALES:
+  1. Crea un RESUMEN GENERAL que sintetice toda la obra.
+  2. Consolida el ANÁLISIS DE PERSONAJES y su EVOLUCIÓN final.
+  3. Genera el MAPA MERMAID de la obra completa.
+  4. Redacta los dos GUIONES DE PODCAST (Personajes y Resumen).`;
+
+  const synthesis = await runAnalysis(ai, model, synthesisPrompt, "SÍNTESIS FINAL", {
+    resumen_general: { type: Type.STRING },
+    analisis_personajes: { type: Type.STRING },
+    evolucion_protagonista: { type: Type.STRING },
+    mermaid_code: { type: Type.STRING },
+    guion_podcast_personajes: { type: Type.STRING },
+    guion_podcast_libro: { type: Type.STRING },
+  });
+
+  // 4. ENSAMBLAJE FINAL
+  return {
+    ...metadata,
+    resumen_detallado_capitulos: allChapterSummaries,
+    resumen_capitulos: allChapterSummaries,
+    ...synthesis
+  };
 };
 
-async function runAnalysis(ai: any, model: string, text: string, phaseName: string) {
+async function runAnalysis(ai: any, model: string, promptText: string, phaseName: string, schemaProperties: any) {
   const prompt = `
-Actúas como el motor lógico de "Mi Biblioteca Personal NAS". Tu misión es analizar el contenido proporcionado y devolver un JSON estructurado.
+Actúas como el motor lógico de "Mi Biblioteca Personal NAS". Responde exclusivamente en JSON.
 
-${text}
-
-### REGLAS:
-1. FICHA TÉCNICA: Título, autor, ISBN, sinopsis, biografía, bibliografía, datos publicación.
-2. RESUMEN GENERAL: Esencia completa de la obra (si es la parte final, incluye el desenlace).
-3. RESUMEN DETALLADO: Desglose capítulo a capítulo con spoilers y detalles minuciosos.
-4. PERSONAJES: Psicología y evolución.
-5. MAPA MERMAID: Código funcional.
-6. PODCASTS: Dos guiones dinámicos.
+${promptText}
 
 ### RESTRICCIONES:
 - Idioma: Español de España.
 - Salida: JSON puro.
-- Estructura: { "titulo": "", "autor": "", "isbn": "", "sinopsis": "", "biografia_autor": "", "bibliografia_autor": "", "datos_publicacion": "", "resumen_general": "", "resumen_detallado_capitulos": "", "resumen_capitulos": "", "analisis_personajes": "", "evolucion_protagonista": "", "mermaid_code": "", "guion_podcast_personajes": "", "guion_podcast_libro": "" }
 `;
 
   try {
@@ -115,29 +138,8 @@ ${text}
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
-          properties: {
-            titulo: { type: Type.STRING },
-            autor: { type: Type.STRING },
-            isbn: { type: Type.STRING },
-            sinopsis: { type: Type.STRING },
-            biografia_autor: { type: Type.STRING },
-            bibliografia_autor: { type: Type.STRING },
-            datos_publicacion: { type: Type.STRING },
-            resumen_general: { type: Type.STRING },
-            resumen_detallado_capitulos: { type: Type.STRING },
-            resumen_capitulos: { type: Type.STRING },
-            analisis_personajes: { type: Type.STRING },
-            evolucion_protagonista: { type: Type.STRING },
-            mermaid_code: { type: Type.STRING },
-            guion_podcast_personajes: { type: Type.STRING },
-            guion_podcast_libro: { type: Type.STRING },
-          },
-          required: [
-            "titulo", "autor", "isbn", "sinopsis", "biografia_autor", "bibliografia_autor",
-            "datos_publicacion", "resumen_general", "resumen_detallado_capitulos", "resumen_capitulos",
-            "analisis_personajes", "evolucion_protagonista", "mermaid_code", 
-            "guion_podcast_personajes", "guion_podcast_libro"
-          ]
+          properties: schemaProperties,
+          required: Object.keys(schemaProperties)
         }
       }
     });
