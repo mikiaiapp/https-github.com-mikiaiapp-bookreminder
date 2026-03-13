@@ -2,7 +2,12 @@ import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import path from "path";
 
-export const analyzeBookBackend = async (content: string, onProgress?: (progress: number, message: string, partialData?: any) => void) => {
+export const analyzeBookBackend = async (
+  content: string, 
+  onProgress?: (progress: number, message: string, partialData?: any, lastChunk?: number) => void,
+  initialState?: any,
+  startChunk: number = 0
+) => {
   console.log("[Gemini Backend] Initializing GoogleGenAI...");
   
   if (onProgress) onProgress(5, "Inicializando motor de IA...");
@@ -31,55 +36,53 @@ export const analyzeBookBackend = async (content: string, onProgress?: (progress
   const ai = new GoogleGenAI({ apiKey });
   const model = "gemini-3-flash-preview";
   
-  // 1. EXTRAER METADATOS (FICHA TÉCNICA)
-  console.log("[Gemini Backend] Phase 1: Extracting Book Metadata...");
-  const metadataPrompt = `Analiza el inicio de este libro y extrae la FICHA TÉCNICA COMPLETA. 
-  Incluye: Título, Autor, ISBN, Sinopsis, Biografía detallada del autor, Bibliografía destacada y datos de publicación.
-  CONTENIDO INICIAL: ${content.substring(0, 100000)}`;
-  
-  const metadata = await runAnalysis(ai, model, metadataPrompt, "METADATOS", {
-    titulo: { type: Type.STRING },
-    autor: { type: Type.STRING },
-    isbn: { type: Type.STRING },
-    sinopsis: { type: Type.STRING },
-    biografia_autor: { type: Type.STRING },
-    bibliografia_autor: { type: Type.STRING },
-    datos_publicacion: { type: Type.STRING },
-  });
+  let metadata = initialState?.metadata || null;
+  let allChapterSummaries = initialState?.resumen_capitulos || "";
+  let allCharacterNotes = initialState?.notas_personajes || "";
 
-  if (onProgress) onProgress(15, "Ficha técnica extraída. Analizando capítulos...", metadata);
+  // 1. EXTRAER METADATOS (FICHA TÉCNICA) - Solo si no los tenemos
+  if (!metadata) {
+    console.log("[Gemini Backend] Phase 1: Extracting Book Metadata...");
+    const metadataPrompt = `Extrae FICHA TÉCNICA: Título, Autor, ISBN, Sinopsis, Biografía autor, Bibliografía y Datos publicación.
+    CONTENIDO: ${content.substring(0, 100000)}`;
+    
+    metadata = await runAnalysis(ai, model, metadataPrompt, "METADATOS", {
+      titulo: { type: Type.STRING },
+      autor: { type: Type.STRING },
+      isbn: { type: Type.STRING },
+      sinopsis: { type: Type.STRING },
+      biografia_autor: { type: Type.STRING },
+      bibliografia_autor: { type: Type.STRING },
+      datos_publicacion: { type: Type.STRING },
+    });
+
+    if (onProgress) onProgress(15, "Ficha técnica extraída. Analizando capítulos...", metadata, 0);
+  }
 
   // 2. ANÁLISIS POR BLOQUES (CAPÍTULOS Y PERSONAJES)
-  const CHUNK_SIZE = 1000000; // Aumentamos a 1M para reducir peticiones (Gemini 3 Flash tiene 1M+ de contexto)
+  const CHUNK_SIZE = 1000000; 
   const totalLength = content.length;
   const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
   
-  let allChapterSummaries = "";
-  let allCharacterNotes = "";
-
-  for (let i = 0; i < numChunks; i++) {
+  for (let i = startChunk; i < numChunks; i++) {
     const start = i * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, totalLength);
     const chunk = content.substring(start, end);
 
     console.log(`[Gemini Backend] Phase 2: Analyzing chunk ${i + 1}/${numChunks}...`);
     
-    if (i > 0) {
+    if (i > startChunk || (startChunk > 0 && i === startChunk)) {
       console.log("[Gemini Backend] Waiting 45 seconds for quota reset...");
       await new Promise(resolve => setTimeout(resolve, 45000));
     }
 
-    const chunkPrompt = `Estás analizando el fragmento ${i + 1} del libro "${metadata.titulo}".
-    Tu tarea es:
-    1. Hacer un resumen exhaustivo capítulo a capítulo de este fragmento.
-    2. Identificar personajes que aparecen y notas sobre su psicología/evolución en esta parte.
-    
-    CONTENIDO DEL FRAGMENTO:
-    ${chunk}`;
+    const chunkPrompt = `Fragmento ${i + 1} de "${metadata.titulo}".
+    TAREA: 1. Resumen capítulos. 2. Notas personajes.
+    CONTENIDO: ${chunk}`;
 
     const chunkResult = await runAnalysis(ai, model, chunkPrompt, `BLOQUE ${i + 1}`, {
-      resumen_capitulos: { type: Type.STRING, description: "Resumen detallado de los capítulos en este bloque" },
-      notas_personajes: { type: Type.STRING, description: "Notas sobre personajes y evolución en este bloque" }
+      resumen_capitulos: { type: Type.STRING },
+      notas_personajes: { type: Type.STRING }
     });
 
     allChapterSummaries += "\n\n" + chunkResult.resumen_capitulos;
@@ -88,10 +91,10 @@ export const analyzeBookBackend = async (content: string, onProgress?: (progress
     if (onProgress) {
       const chunkProgress = 15 + Math.floor(((i + 1) / numChunks) * 60);
       onProgress(chunkProgress, `Analizado bloque ${i + 1} de ${numChunks}...`, {
-        ...metadata,
+        metadata,
         resumen_capitulos: allChapterSummaries,
         notas_personajes: allCharacterNotes
-      });
+      }, i + 1);
     }
   }
 
@@ -100,19 +103,10 @@ export const analyzeBookBackend = async (content: string, onProgress?: (progress
   console.log("[Gemini Backend] Waiting 45 seconds for final quota reset...");
   await new Promise(resolve => setTimeout(resolve, 45000));
 
-  const synthesisPrompt = `Basándote en los siguientes resúmenes de capítulos y notas de personajes, genera el análisis final del libro "${metadata.titulo}".
-  
-  RESÚMENES DE CAPÍTULOS ACUMULADOS:
-  ${allChapterSummaries}
-  
-  NOTAS DE PERSONAJES ACUMULADAS:
-  ${allCharacterNotes}
-  
-  TAREAS FINALES:
-  1. Crea un RESUMEN GENERAL que sintetice toda la obra.
-  2. Consolida el ANÁLISIS DE PERSONAJES y su EVOLUCIÓN final.
-  3. Genera el MAPA MERMAID de la obra completa.
-  4. Redacta los dos GUIONES DE PODCAST (Personajes y Resumen).`;
+  const synthesisPrompt = `Sintetiza análisis final de "${metadata.titulo}".
+  RESÚMENES: ${allChapterSummaries.substring(0, 50000)}
+  NOTAS: ${allCharacterNotes.substring(0, 20000)}
+  TAREAS: 1. Resumen general. 2. Análisis personajes/evolución. 3. Mapa Mermaid. 4. Guiones Podcast (Personajes y Libro).`;
 
   const synthesis = await runAnalysis(ai, model, synthesisPrompt, "SÍNTESIS FINAL", {
     resumen_general: { type: Type.STRING },
@@ -123,7 +117,12 @@ export const analyzeBookBackend = async (content: string, onProgress?: (progress
     guion_podcast_libro: { type: Type.STRING },
   });
 
-  if (onProgress) onProgress(100, "Análisis completado con éxito.");
+  if (onProgress) onProgress(100, "Análisis completado con éxito.", {
+    metadata,
+    resumen_capitulos: allChapterSummaries,
+    notas_personajes: allCharacterNotes,
+    ...synthesis
+  }, numChunks);
 
   // 4. ENSAMBLAJE FINAL
   return {

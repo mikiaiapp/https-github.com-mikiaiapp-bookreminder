@@ -19,6 +19,7 @@ export interface BookAnalysis {
 export const analyzeBook = async (
   content: string, 
   token: string, 
+  libraryId: number,
   onProgress?: (progress: number, message: string, logs: string[], partialResult: any) => void
 ): Promise<BookAnalysis> => {
   const response = await fetch('/api/analyze', {
@@ -27,7 +28,7 @@ export const analyzeBook = async (
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
     },
-    body: JSON.stringify({ content })
+    body: JSON.stringify({ content, libraryId })
   });
 
   if (!response.ok) {

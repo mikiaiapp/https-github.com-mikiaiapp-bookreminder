@@ -11,31 +11,86 @@ import { analyzeBookBackend } from "./gemini";
 const router = Router();
 
 // --- GEMINI ANALYSIS ---
-router.post("/analyze", authMiddleware, async (req, res) => {
+router.post("/analyze", authMiddleware, async (req: any, res) => {
   console.log("[API /analyze] Request received");
   try {
-    const { content } = req.body;
-    if (!content) {
-      return res.status(400).json({ error: "Content is required" });
+    const { content, libraryId } = req.body;
+    if (!content || !libraryId) {
+      return res.status(400).json({ error: "Content and libraryId are required" });
     }
     
     const jobId = crypto.randomUUID();
-    db.prepare("INSERT INTO analysis_jobs (id, status, progress) VALUES (?, ?, ?)").run(jobId, 'processing', 0);
+    
+    // Create a placeholder book first
+    const bookResult = db.prepare(`
+      INSERT INTO books (library_id, titulo, status)
+      VALUES (?, ?, 'processing')
+    `).run(libraryId, 'Analizando nuevo libro...');
+    const bookId = bookResult.lastInsertRowid;
+
+    db.prepare("INSERT INTO analysis_jobs (id, status, progress, content, book_id) VALUES (?, ?, ?, ?, ?)")
+      .run(jobId, 'processing', 0, content, bookId);
     
     // Start analysis in background
     (async () => {
       try {
         let accumulatedLogs = "";
-        const analysis = await analyzeBookBackend(content, (progress, message, partialData) => {
+        
+        // Check if we can resume
+        const existingJob = db.prepare("SELECT * FROM analysis_jobs WHERE id = ?").get(jobId) as any;
+        const initialState = existingJob?.partial_result ? JSON.parse(existingJob.partial_result) : null;
+        const startChunk = existingJob?.last_chunk || 0;
+
+        const analysis = await analyzeBookBackend(content, (progress, message, partialData, lastChunk) => {
           accumulatedLogs += (accumulatedLogs ? "\n" : "") + message;
-          db.prepare("UPDATE analysis_jobs SET progress = ?, message = ?, logs = ?, partial_result = ? WHERE id = ?")
-            .run(progress, message, accumulatedLogs, partialData ? JSON.stringify(partialData) : null, jobId);
-        });
+          db.prepare("UPDATE analysis_jobs SET progress = ?, message = ?, logs = ?, partial_result = ?, last_chunk = ? WHERE id = ?")
+            .run(progress, message, accumulatedLogs, partialData ? JSON.stringify(partialData) : null, lastChunk, jobId);
+          
+          // Also update the book if we have metadata
+          if (partialData && partialData.metadata) {
+            const m = partialData.metadata;
+            db.prepare(`
+              UPDATE books SET 
+                titulo = ?, autor = ?, isbn = ?, sinopsis = ?, 
+                biografia_autor = ?, bibliografia_autor = ?, datos_publicacion = ?,
+                resumen_capitulos = ?, analisis_personajes = ?, status = 'partial'
+              WHERE id = (SELECT book_id FROM analysis_jobs WHERE id = ?)
+            `).run(
+              m.titulo, m.autor, m.isbn, m.sinopsis, 
+              m.biografia_autor, m.bibliografia_autor, m.datos_publicacion,
+              partialData.resumen_capitulos || "", partialData.notas_personajes || "",
+              jobId
+            );
+          }
+        }, initialState, startChunk);
+
         db.prepare("UPDATE analysis_jobs SET status = ?, progress = 100, message = ?, logs = ?, result = ? WHERE id = ?")
           .run('completed', 'Finalizado', accumulatedLogs + "\nFinalizado", JSON.stringify(analysis), jobId);
+        
+        // Final book update
+        db.prepare(`
+          UPDATE books SET 
+            titulo = ?, autor = ?, isbn = ?, sinopsis = ?, 
+            biografia_autor = ?, bibliografia_autor = ?, datos_publicacion = ?,
+            resumen_general = ?, resumen_detallado_capitulos = ?, resumen_capitulos = ?,
+            analisis_personajes = ?, evolucion_protagonista = ?, mermaid_code = ?,
+            guion_podcast_personajes = ?, guion_podcast_libro = ?, status = 'completed'
+          WHERE id = (SELECT book_id FROM analysis_jobs WHERE id = ?)
+        `).run(
+          analysis.titulo, analysis.autor, analysis.isbn, analysis.sinopsis,
+          analysis.biografia_autor, analysis.bibliografia_autor, analysis.datos_publicacion,
+          analysis.resumen_general, analysis.resumen_detallado_capitulos, analysis.resumen_capitulos,
+          analysis.analisis_personajes, analysis.evolucion_protagonista, analysis.mermaid_code,
+          analysis.guion_podcast_personajes, analysis.guion_podcast_libro,
+          jobId
+        );
       } catch (err: any) {
         console.error(`[Job ${jobId}] Error:`, err);
         db.prepare("UPDATE analysis_jobs SET status = ?, error = ? WHERE id = ?").run('failed', err.message, jobId);
+        
+        // Mark book as partial/failed
+        db.prepare("UPDATE books SET status = 'partial' WHERE id = (SELECT book_id FROM analysis_jobs WHERE id = ?)")
+          .run(jobId);
       }
     })();
 
@@ -65,6 +120,13 @@ router.get("/analysis-status/:jobId", authMiddleware, (req, res) => {
   }
   
   res.json(response);
+});
+
+router.get("/books/:id/job", authMiddleware, (req: any, res) => {
+  const bookId = req.params.id;
+  const job = db.prepare("SELECT id, content FROM analysis_jobs WHERE book_id = ?").get(bookId) as any;
+  if (!job) return res.status(404).json({ error: "Job not found for this book" });
+  res.json({ jobId: job.id, content: job.content });
 });
 
 // --- AUTHENTICATION ---

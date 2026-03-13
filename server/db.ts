@@ -57,6 +57,7 @@ db.exec(`
     mermaid_code TEXT,
     guion_podcast_personajes TEXT,
     guion_podcast_libro TEXT,
+    status TEXT DEFAULT 'completed', -- 'completed', 'partial', 'processing'
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (library_id) REFERENCES libraries(id)
   );
@@ -86,9 +87,13 @@ db.exec(`
     message TEXT,
     logs TEXT, -- Accumulated messages
     partial_result TEXT, -- Incremental data
+    content TEXT, -- Store content to allow resuming
+    last_chunk INTEGER DEFAULT 0,
+    book_id INTEGER,
     result TEXT,
     error TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES books(id)
   );
 `);
 
@@ -130,6 +135,30 @@ try {
   db.prepare("SELECT partial_result FROM analysis_jobs LIMIT 1").get();
 } catch (e) {
   db.exec("ALTER TABLE analysis_jobs ADD COLUMN partial_result TEXT");
+}
+
+try {
+  db.prepare("SELECT status FROM books LIMIT 1").get();
+} catch (e) {
+  db.exec("ALTER TABLE books ADD COLUMN status TEXT DEFAULT 'completed'");
+}
+
+try {
+  db.prepare("SELECT content FROM analysis_jobs LIMIT 1").get();
+} catch (e) {
+  db.exec("ALTER TABLE analysis_jobs ADD COLUMN content TEXT");
+}
+
+try {
+  db.prepare("SELECT last_chunk FROM analysis_jobs LIMIT 1").get();
+} catch (e) {
+  db.exec("ALTER TABLE analysis_jobs ADD COLUMN last_chunk INTEGER DEFAULT 0");
+}
+
+try {
+  db.prepare("SELECT book_id FROM analysis_jobs LIMIT 1").get();
+} catch (e) {
+  db.exec("ALTER TABLE analysis_jobs ADD COLUMN book_id INTEGER REFERENCES books(id)");
 }
 
 export default db;

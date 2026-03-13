@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Book, Upload, Search, Trash2, Brain, Mic2, FileText, Network,
-  Loader2, Plus, X, History, LogOut, ShieldAlert, Users, Library
+  Loader2, Plus, X, History, LogOut, ShieldAlert, Users, Library, RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { analyzeBook, BookAnalysis } from '../../services/geminiService';
@@ -19,6 +19,7 @@ function cn(...inputs: ClassValue[]) {
 interface SavedBook extends BookAnalysis {
   id: number;
   created_at: string;
+  status?: 'processing' | 'partial' | 'completed';
 }
 
 interface Library {
@@ -170,9 +171,10 @@ export default function Dashboard() {
       reader.onload = async (event) => {
         const content = event.target?.result as string;
         try {
-          const analysis = await analyzeBook(
+          await analyzeBook(
             content || "Contenido de prueba para el libro: " + file.name, 
             token || "",
+            selectedLibrary.id,
             (progress, message, logs, partial) => {
               setAnalysisProgress(progress);
               setAnalysisMessage(message);
@@ -181,22 +183,8 @@ export default function Dashboard() {
             }
           );
           
-          const saveRes = await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`
-            },
-            body: JSON.stringify(analysis)
-          });
-          
-          if (!saveRes.ok) throw new Error('Error al guardar');
-          
-          const { id } = await saveRes.json();
-          const newBook = { ...analysis, id, created_at: new Date().toISOString() };
-          setBooks([newBook, ...books]);
-          setSelectedBook(newBook);
-          setSuccessMsg('Análisis completado y guardado con éxito');
+          fetchBooks(selectedLibrary.id);
+          setSuccessMsg('Análisis completado con éxito');
         } catch (err: any) {
           setError(err.message || "Error analizando el libro. Por favor, inténtalo de nuevo.");
           console.error(err);
@@ -215,6 +203,41 @@ export default function Dashboard() {
     }
   };
 
+  const resumeAnalysis = async (book: any) => {
+    if (!selectedLibrary) return;
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    setAnalysisMessage('Reanudando análisis...');
+    
+    try {
+      // Find the job for this book
+      const res = await fetch(`/api/books/${book.id}/job`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error("No se encontró el trabajo de análisis");
+      const { jobId, content } = await res.json();
+
+      await analyzeBook(
+        content,
+        token || "",
+        selectedLibrary.id,
+        (progress, message, logs, partial) => {
+          setAnalysisProgress(progress);
+          setAnalysisMessage(message);
+          setAnalysisLogs(logs);
+          setPartialBook(partial);
+        }
+      );
+      fetchBooks(selectedLibrary.id);
+      setSuccessMsg('Análisis reanudado y completado con éxito');
+    } catch (err: any) {
+      setError(err.message || "Error al reanudar el análisis");
+    } finally {
+      setIsAnalyzing(false);
+      setAnalysisProgress(0);
+      setAnalysisMessage('');
+    }
+  };
   const deleteBook = async (id: number) => {
     if (!confirm('¿Estás seguro de que quieres eliminar este análisis?')) return;
     try {
@@ -349,21 +372,44 @@ export default function Dashboard() {
                   )}>
                     {book.titulo}
                   </h3>
-                  {selectedLibrary?.role !== 'viewer' && (
-                    <Trash2 
-                      className="w-4 h-4 text-[#333] hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity absolute right-4 top-4" 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteBook(book.id);
-                      }}
-                    />
-                  )}
+                  <div className="flex items-center gap-2 absolute right-4 top-4">
+                    {book.status === 'partial' && selectedLibrary?.role !== 'viewer' && (
+                      <RefreshCw 
+                        className="w-4 h-4 text-[#F27D26] hover:text-[#FF8C37] transition-colors cursor-pointer" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          resumeAnalysis(book);
+                        }}
+                      />
+                    )}
+                    {selectedLibrary?.role !== 'viewer' && (
+                      <Trash2 
+                        className="w-4 h-4 text-[#333] hover:text-red-500 transition-opacity cursor-pointer" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteBook(book.id);
+                        }}
+                      />
+                    )}
+                  </div>
                 </div>
                 <p className="text-xs text-[#8E9299] italic font-serif">{book.autor}</p>
-                <div className="mt-3 flex items-center gap-2">
-                  <span className="text-[9px] font-mono bg-[#1A1A1A] px-1.5 py-0.5 rounded text-[#555]">
-                    {new Date(book.created_at).toLocaleDateString()}
-                  </span>
+                <div className="mt-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] font-mono bg-[#1A1A1A] px-1.5 py-0.5 rounded text-[#555]">
+                      {new Date(book.created_at).toLocaleDateString()}
+                    </span>
+                    {book.status === 'partial' && (
+                      <span className="text-[9px] font-mono bg-orange-950 text-orange-400 px-1.5 py-0.5 rounded border border-orange-900">
+                        PARCIAL
+                      </span>
+                    )}
+                    {book.status === 'processing' && (
+                      <span className="text-[9px] font-mono bg-blue-950 text-blue-400 px-1.5 py-0.5 rounded border border-blue-900 animate-pulse">
+                        PROCESANDO
+                      </span>
+                    )}
+                  </div>
                 </div>
               </button>
             ))}
@@ -429,15 +475,32 @@ export default function Dashboard() {
                 exit={{ opacity: 0, y: -10 }}
                 className="p-8 max-w-5xl mx-auto"
               >
-                {/* Book Header */}
-                <div className="mb-12 border-b border-[#141414] pb-8">
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="text-[10px] font-mono text-[#F27D26] border border-[#F27D26]/30 px-2 py-0.5 rounded-full uppercase">Análisis Completo</span>
-                    <span className="text-[10px] font-mono text-[#8E9299] uppercase">ID: {selectedBook.id.toString().padStart(4, '0')}</span>
+                {selectedBook.status === 'processing' ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center">
+                    <Loader2 className="w-12 h-12 text-[#F27D26] animate-spin mb-6" />
+                    <h2 className="text-3xl font-bold uppercase tracking-tighter mb-4">Análisis en curso</h2>
+                    <p className="text-[#8E9299] max-w-md font-serif italic">
+                      Estamos procesando "{selectedBook.titulo}". Los resultados aparecerán aquí automáticamente una vez finalizado el proceso.
+                    </p>
                   </div>
-                  <h2 className="text-5xl font-bold tracking-tighter mb-2 leading-none">{selectedBook.titulo}</h2>
-                  <p className="text-xl font-serif italic text-[#8E9299]">{selectedBook.autor}</p>
-                </div>
+                ) : (
+                  <>
+                    {/* Book Header */}
+                    <div className="mb-12 border-b border-[#141414] pb-8">
+                      <div className="flex items-center gap-2 mb-4">
+                        <span className={cn(
+                          "text-[10px] font-mono border px-2 py-0.5 rounded-full uppercase",
+                          selectedBook.status === 'partial' 
+                            ? "text-orange-400 border-orange-400/30" 
+                            : "text-[#F27D26] border-[#F27D26]/30"
+                        )}>
+                          {selectedBook.status === 'partial' ? 'Análisis Parcial' : 'Análisis Completo'}
+                        </span>
+                        <span className="text-[10px] font-mono text-[#8E9299] uppercase">ID: {selectedBook.id.toString().padStart(4, '0')}</span>
+                      </div>
+                      <h2 className="text-5xl font-bold tracking-tighter mb-2 leading-none">{selectedBook.titulo}</h2>
+                      <p className="text-xl font-serif italic text-[#8E9299]">{selectedBook.autor}</p>
+                    </div>
 
                 {/* Tabs */}
                 <div className="flex gap-8 border-b border-[#141414] mb-8 overflow-x-auto no-scrollbar">
@@ -609,7 +672,9 @@ export default function Dashboard() {
                     </div>
                   )}
                 </div>
-              </motion.div>
+              </>
+            )}
+          </motion.div>
             ) : (
               <div className="h-full flex flex-col items-center justify-center p-8 text-center">
                 <div className="w-24 h-24 bg-[#141414] rounded-full flex items-center justify-center mb-6">
