@@ -53,12 +53,14 @@ router.post("/analyze", authMiddleware, async (req: any, res) => {
               UPDATE books SET 
                 titulo = ?, autor = ?, isbn = ?, sinopsis = ?, 
                 biografia_autor = ?, bibliografia_autor = ?, datos_publicacion = ?,
-                resumen_capitulos = ?, analisis_personajes = ?, status = 'partial'
+                resumen_capitulos = ?, resumen_detallado_capitulos = ?, analisis_personajes = ?, status = 'partial'
               WHERE id = (SELECT book_id FROM analysis_jobs WHERE id = ?)
             `).run(
               m.titulo, m.autor, m.isbn, m.sinopsis, 
               m.biografia_autor, m.bibliografia_autor, m.datos_publicacion,
-              partialData.resumen_capitulos || "", partialData.notas_personajes || "",
+              partialData.resumen_capitulos || "", 
+              partialData.resumen_capitulos || "", // Use same for detailed during partial
+              partialData.notas_personajes || "",
               jobId
             );
           }
@@ -94,7 +96,7 @@ router.post("/analyze", authMiddleware, async (req: any, res) => {
       }
     })();
 
-    res.json({ jobId });
+    res.json({ jobId, bookId });
   } catch (err: any) {
     console.error("[API /analyze] Error starting job:", err);
     res.status(500).json({ error: "Error starting analysis" });

@@ -60,7 +60,7 @@ export const analyzeBookBackend = async (
   }
 
   // 2. ANÁLISIS POR BLOQUES (CAPÍTULOS Y PERSONAJES)
-  const CHUNK_SIZE = 1000000; 
+  const CHUNK_SIZE = 2000000; // Aumentado a 2M para reducir peticiones (Gemini 3 Flash tiene 1M+ tokens de contexto)
   const totalLength = content.length;
   const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
   
@@ -71,13 +71,19 @@ export const analyzeBookBackend = async (
 
     console.log(`[Gemini Backend] Phase 2: Analyzing chunk ${i + 1}/${numChunks}...`);
     
-    if (i > startChunk || (startChunk > 0 && i === startChunk)) {
-      console.log("[Gemini Backend] Waiting 45 seconds for quota reset...");
-      await new Promise(resolve => setTimeout(resolve, 45000));
+    // Reducir espera si es la primera petición de la sesión para agilizar
+    if (i > startChunk) {
+      console.log("[Gemini Backend] Waiting 30 seconds for quota reset...");
+      await new Promise(resolve => setTimeout(resolve, 30000));
     }
 
-    const chunkPrompt = `Fragmento ${i + 1} de "${metadata.titulo}".
-    TAREA: 1. Resumen capítulos. 2. Notas personajes.
+    const chunkPrompt = `Fragmento ${i + 1} de ${numChunks} de "${metadata.titulo}".
+    TAREA: 
+    1. Resumen de capítulos: Identifica capítulos en este fragmento y resúmelos con detalle (modo spoiler).
+    2. Notas de personajes: Identifica personajes nuevos o evolución de los existentes.
+    
+    IMPORTANTE: Sé conciso pero riguroso. Si un capítulo empieza en este bloque pero no termina, resume lo que hay.
+    
     CONTENIDO: ${chunk}`;
 
     const chunkResult = await runAnalysis(ai, model, chunkPrompt, `BLOQUE ${i + 1}`, {

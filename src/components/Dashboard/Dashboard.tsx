@@ -180,6 +180,31 @@ export default function Dashboard() {
               setAnalysisMessage(message);
               setAnalysisLogs(logs);
               setPartialBook(partial);
+              
+              // Update books list and selectedBook with partial data
+              if (partial && partial.metadata) {
+                const updatedBook = {
+                  id: partial.bookId,
+                  titulo: partial.metadata.titulo,
+                  autor: partial.metadata.autor,
+                  isbn: partial.metadata.isbn,
+                  sinopsis: partial.metadata.sinopsis,
+                  biografia_autor: partial.metadata.biografia_autor,
+                  bibliografia_autor: partial.metadata.bibliografia_autor,
+                  datos_publicacion: partial.metadata.datos_publicacion,
+                  resumen_capitulos: partial.resumen_capitulos || "",
+                  resumen_detallado_capitulos: partial.resumen_capitulos || "",
+                  analisis_personajes: partial.notas_personajes || "",
+                  status: 'processing',
+                  created_at: new Date().toISOString()
+                } as any;
+
+                setBooks(prev => prev.map(b => b.id === partial.bookId ? { ...b, ...updatedBook } : b));
+                
+                if (selectedBook?.id === partial.bookId || (!selectedBook && progress > 10)) {
+                  setSelectedBook(prev => prev?.id === partial.bookId ? { ...prev, ...updatedBook } : updatedBook);
+                }
+              }
             }
           );
           
@@ -226,6 +251,31 @@ export default function Dashboard() {
           setAnalysisMessage(message);
           setAnalysisLogs(logs);
           setPartialBook(partial);
+
+          // Update books list and selectedBook with partial data
+          if (partial && partial.metadata) {
+            const updatedBook = {
+              id: partial.bookId,
+              titulo: partial.metadata.titulo,
+              autor: partial.metadata.autor,
+              isbn: partial.metadata.isbn,
+              sinopsis: partial.metadata.sinopsis,
+              biografia_autor: partial.metadata.biografia_autor,
+              bibliografia_autor: partial.metadata.bibliografia_autor,
+              datos_publicacion: partial.metadata.datos_publicacion,
+              resumen_capitulos: partial.resumen_capitulos || "",
+              resumen_detallado_capitulos: partial.resumen_capitulos || "",
+              analisis_personajes: partial.notas_personajes || "",
+              status: 'processing',
+              created_at: book.created_at // Keep original date
+            } as any;
+
+            setBooks(prev => prev.map(b => b.id === partial.bookId ? { ...b, ...updatedBook } : b));
+            
+            if (selectedBook?.id === partial.bookId) {
+              setSelectedBook(prev => prev?.id === partial.bookId ? { ...prev, ...updatedBook } : updatedBook);
+            }
+          }
         }
       );
       fetchBooks(selectedLibrary.id);
@@ -475,26 +525,34 @@ export default function Dashboard() {
                 exit={{ opacity: 0, y: -10 }}
                 className="p-8 max-w-5xl mx-auto"
               >
-                {selectedBook.status === 'processing' ? (
+                {selectedBook.status === 'processing' && selectedBook.titulo === 'Analizando nuevo libro...' ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center">
                     <Loader2 className="w-12 h-12 text-[#F27D26] animate-spin mb-6" />
                     <h2 className="text-3xl font-bold uppercase tracking-tighter mb-4">Análisis en curso</h2>
                     <p className="text-[#8E9299] max-w-md font-serif italic">
-                      Estamos procesando "{selectedBook.titulo}". Los resultados aparecerán aquí automáticamente una vez finalizado el proceso.
+                      Estamos procesando el archivo. Los resultados aparecerán aquí automáticamente en cuanto se extraiga la información básica.
                     </p>
                   </div>
                 ) : (
                   <>
                     {/* Book Header */}
-                    <div className="mb-12 border-b border-[#141414] pb-8">
+                    <div className="mb-12 border-b border-[#141414] pb-8 relative">
+                      {selectedBook.status === 'processing' && (
+                        <div className="absolute -top-4 right-0 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-[#F27D26] animate-pulse" />
+                          <span className="text-[10px] font-mono text-[#F27D26] uppercase font-bold">Actualizando en tiempo real...</span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-2 mb-4">
                         <span className={cn(
                           "text-[10px] font-mono border px-2 py-0.5 rounded-full uppercase",
                           selectedBook.status === 'partial' 
                             ? "text-orange-400 border-orange-400/30" 
-                            : "text-[#F27D26] border-[#F27D26]/30"
+                            : selectedBook.status === 'processing'
+                              ? "text-blue-400 border-blue-400/30"
+                              : "text-[#F27D26] border-[#F27D26]/30"
                         )}>
-                          {selectedBook.status === 'partial' ? 'Análisis Parcial' : 'Análisis Completo'}
+                          {selectedBook.status === 'partial' ? 'Análisis Parcial' : selectedBook.status === 'processing' ? 'Procesando...' : 'Análisis Completo'}
                         </span>
                         <span className="text-[10px] font-mono text-[#8E9299] uppercase">ID: {selectedBook.id.toString().padStart(4, '0')}</span>
                       </div>

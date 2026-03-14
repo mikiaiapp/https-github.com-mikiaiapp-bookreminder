@@ -36,7 +36,7 @@ export const analyzeBook = async (
     throw new Error(errorData.error || "Error starting analysis");
   }
 
-  const { jobId } = await response.json();
+  const { jobId, bookId } = await response.json();
 
   // Polling
   return new Promise((resolve, reject) => {
@@ -51,7 +51,7 @@ export const analyzeBook = async (
         const data = await res.json();
         
         if (onProgress && data.progress !== undefined) {
-          onProgress(data.progress, data.message || "", data.logs || [], data.partialResult);
+          onProgress(data.progress, data.message || "", data.logs || [], { ...data.partialResult, bookId });
         }
 
         if (data.status === 'completed') {
