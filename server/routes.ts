@@ -10,6 +10,7 @@ import {
   analyzeBookBackend, 
   identifyBook, 
   fetchBookMetadata, 
+  detectChapters,
   analyzeChapters, 
   generateGeneralSummary, 
   analyzeCharactersPhased, 
@@ -439,6 +440,7 @@ router.post("/books/:id/identify", authMiddleware, async (req: any, res) => {
 router.post("/books/:id/metadata", authMiddleware, async (req: any, res) => {
   const bookId = req.params.id;
   const book = db.prepare("SELECT titulo, autor FROM books WHERE id = ?").get(bookId) as any;
+  if (!book) return res.status(404).json({ error: "Libro no encontrado" });
   try {
     const metadata = await fetchBookMetadata(book.titulo, book.autor);
     db.prepare(`
@@ -447,10 +449,24 @@ router.post("/books/:id/metadata", authMiddleware, async (req: any, res) => {
         bibliografia_autor = ?, datos_publicacion = ?, phase = 1
       WHERE id = ?
     `).run(
-      metadata.isbn, metadata.sinopsis, metadata.biografia_autor, 
-      metadata.bibliografia_autor, metadata.datos_publicacion, bookId
+      metadata.isbn || "", metadata.sinopsis || "", metadata.biografia_autor || "", 
+      metadata.bibliografia_autor || "", metadata.datos_publicacion || "", bookId
     );
     res.json(metadata);
+  } catch (err: any) {
+    console.error("[API /metadata] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/books/:id/detect-chapters", authMiddleware, async (req: any, res) => {
+  const { content } = req.body;
+  const bookId = req.params.id;
+  try {
+    const chapters = await detectChapters(content);
+    db.prepare("UPDATE books SET resumen_capitulos = ?, phase = 2 WHERE id = ?")
+      .run(JSON.stringify(chapters), bookId);
+    res.json({ chapters });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -460,10 +476,10 @@ router.post("/books/:id/chapters", authMiddleware, async (req: any, res) => {
   const { content } = req.body;
   const bookId = req.params.id;
   try {
-    const chapters = await analyzeChapters(content);
-    db.prepare("UPDATE books SET resumen_detallado_capitulos = ?, phase = 2 WHERE id = ?")
-      .run(chapters, bookId);
-    res.json({ chapters });
+    const chaptersSummary = await analyzeChapters(content);
+    db.prepare("UPDATE books SET resumen_detallado_capitulos = ?, phase = 3 WHERE id = ?")
+      .run(chaptersSummary, bookId);
+    res.json({ chapters: chaptersSummary });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -474,7 +490,7 @@ router.post("/books/:id/summary", authMiddleware, async (req: any, res) => {
   const book = db.prepare("SELECT resumen_detallado_capitulos FROM books WHERE id = ?").get(bookId) as any;
   try {
     const summary = await generateGeneralSummary(book.resumen_detallado_capitulos);
-    db.prepare("UPDATE books SET resumen_general = ?, phase = 3 WHERE id = ?")
+    db.prepare("UPDATE books SET resumen_general = ?, phase = 4 WHERE id = ?")
       .run(summary, bookId);
     res.json({ summary });
   } catch (err: any) {
@@ -487,7 +503,7 @@ router.post("/books/:id/characters", authMiddleware, async (req: any, res) => {
   const book = db.prepare("SELECT resumen_detallado_capitulos FROM books WHERE id = ?").get(bookId) as any;
   try {
     const analysis = await analyzeCharactersPhased(book.resumen_detallado_capitulos);
-    db.prepare("UPDATE books SET analisis_personajes = ?, evolucion_protagonista = ?, phase = 4 WHERE id = ?")
+    db.prepare("UPDATE books SET analisis_personajes = ?, evolucion_protagonista = ?, phase = 5 WHERE id = ?")
       .run(analysis.personajes, analysis.evolucion, bookId);
     res.json(analysis);
   } catch (err: any) {
@@ -500,7 +516,7 @@ router.post("/books/:id/map", authMiddleware, async (req: any, res) => {
   const book = db.prepare("SELECT resumen_general, analisis_personajes FROM books WHERE id = ?").get(bookId) as any;
   try {
     const mermaid = await generateMentalMap(book.resumen_general, book.analisis_personajes);
-    db.prepare("UPDATE books SET mermaid_code = ?, phase = 5 WHERE id = ?")
+    db.prepare("UPDATE books SET mermaid_code = ?, phase = 6 WHERE id = ?")
       .run(mermaid, bookId);
     res.json({ mermaid });
   } catch (err: any) {
@@ -513,7 +529,7 @@ router.post("/books/:id/podcast", authMiddleware, async (req: any, res) => {
   const book = db.prepare("SELECT resumen_general, analisis_personajes FROM books WHERE id = ?").get(bookId) as any;
   try {
     const scripts = await generatePodcastScripts(book.resumen_general, book.analisis_personajes);
-    db.prepare("UPDATE books SET guion_podcast_personajes = ?, guion_podcast_libro = ?, phase = 6 WHERE id = ?")
+    db.prepare("UPDATE books SET guion_podcast_personajes = ?, guion_podcast_libro = ?, phase = 7 WHERE id = ?")
       .run(scripts.personajes, scripts.libro, bookId);
     res.json(scripts);
   } catch (err: any) {
@@ -526,7 +542,7 @@ router.post("/books/:id/extra", authMiddleware, async (req: any, res) => {
   const book = db.prepare("SELECT resumen_general FROM books WHERE id = ?").get(bookId) as any;
   try {
     const extra = await generateExtraInfo(book.resumen_general);
-    db.prepare("UPDATE books SET sentimiento_clave = ?, citas_clave = ? WHERE id = ?")
+    db.prepare("UPDATE books SET sentimiento_clave = ?, citas_clave = ?, phase = 8 WHERE id = ?")
       .run(extra.sentimiento, extra.citas, bookId);
     res.json(extra);
   } catch (err: any) {

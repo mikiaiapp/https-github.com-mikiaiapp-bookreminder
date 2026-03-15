@@ -153,30 +153,60 @@ export const identifyBook = async (content: string) => {
 export const fetchBookMetadata = async (titulo: string, autor: string) => {
   const ai = getAI();
   const prompt = `Busca información detallada del libro "${titulo}" de ${autor}.
-  Necesito: ISBN, Sinopsis, Biografía del autor, Bibliografía destacada y Datos de publicación.
-  Usa fuentes como Amazon, Google Books, Lecturalia, etc.`;
+  Necesito: ISBN (solo el número), Sinopsis (resumen de la trama), Biografía del autor, Bibliografía destacada y Datos de publicación (editorial, año).
+  Usa herramientas de búsqueda para obtener datos reales.`;
   
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: [{ parts: [{ text: prompt }] }],
-    config: {
-      tools: [{ googleSearch: {} }],
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          isbn: { type: Type.STRING },
-          sinopsis: { type: Type.STRING },
-          biografia_autor: { type: Type.STRING },
-          bibliografia_autor: { type: Type.STRING },
-          datos_publicacion: { type: Type.STRING },
-        },
-        required: ["isbn", "sinopsis", "biografia_autor", "bibliografia_autor", "datos_publicacion"]
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [{ parts: [{ text: prompt }] }],
+      config: {
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            isbn: { type: Type.STRING },
+            sinopsis: { type: Type.STRING },
+            biografia_autor: { type: Type.STRING },
+            bibliografia_autor: { type: Type.STRING },
+            datos_publicacion: { type: Type.STRING },
+          },
+          required: ["isbn", "sinopsis", "biografia_autor", "bibliografia_autor", "datos_publicacion"]
+        }
       }
+    });
+    
+    const text = response.text;
+    if (!text) throw new Error("No se recibió respuesta de metadatos");
+    return JSON.parse(text);
+  } catch (err: any) {
+    console.error("[Gemini] Error fetching metadata:", err);
+    // Fallback to a simpler prompt without search if search fails
+    const fallbackPrompt = `Proporciona información general del libro "${titulo}" de ${autor} en formato JSON.`;
+    return runAnalysis(ai, "gemini-3-flash-preview", fallbackPrompt, "METADATOS FALLBACK", {
+      isbn: { type: Type.STRING },
+      sinopsis: { type: Type.STRING },
+      biografia_autor: { type: Type.STRING },
+      bibliografia_autor: { type: Type.STRING },
+      datos_publicacion: { type: Type.STRING },
+    });
+  }
+};
+
+export const detectChapters = async (content: string) => {
+  const ai = getAI();
+  const prompt = `Identifica la lista de CAPÍTULOS o PARTES de este libro.
+  Devuelve una lista de títulos o números de capítulos.
+  CONTENIDO: ${content.substring(0, 100000)}`;
+  
+  const result = await runAnalysis(ai, "gemini-3-flash-preview", prompt, "DETECCIÓN CAPÍTULOS", {
+    capitulos: { 
+      type: Type.ARRAY,
+      items: { type: Type.STRING }
     }
   });
-  
-  return JSON.parse(response.text);
+  return result.capitulos;
 };
 
 export const analyzeChapters = async (content: string) => {
