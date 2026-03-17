@@ -67,6 +67,21 @@ export default function Dashboard() {
   const [bookToDelete, setBookToDelete] = useState<number | null>(null);
   const stopRef = useRef(false);
 
+  const safeFetchJson = async (res: Response) => {
+    const contentType = res.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      return await res.json();
+    }
+    const text = await res.text();
+    if (!res.ok) {
+      if (text.includes("<html>")) {
+        throw new Error(`Error del servidor (${res.status}): El servicio está tardando demasiado o no está disponible.`);
+      }
+      throw new Error(text || `Error del servidor (${res.status})`);
+    }
+    return text;
+  };
+
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -107,7 +122,7 @@ export default function Dashboard() {
       const res = await fetch('/api/libraries', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = await safeFetchJson(res);
       setLibraries(data);
       if (data.length > 0 && !selectedLibrary) {
         setSelectedLibrary(data[0]);
@@ -122,7 +137,7 @@ export default function Dashboard() {
       const res = await fetch(`/api/libraries/${libraryId}/books`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = await safeFetchJson(res);
       setBooks(data);
     } catch (err) {
       console.error('Error fetching books:', err);
@@ -188,7 +203,7 @@ export default function Dashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
-        const data = await res.json();
+        const data = await safeFetchJson(res);
         setChapters(data);
       }
     } catch (err) {
@@ -206,7 +221,7 @@ export default function Dashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!jobRes.ok) throw new Error("No se encontró el contenido del libro.");
-      const { content } = await jobRes.json();
+      const { content } = await safeFetchJson(jobRes);
 
       const res = await fetch(`/api/books/${selectedBook.id}/chapters/${chapterId}/summarize`, {
         method: 'POST',
@@ -219,9 +234,10 @@ export default function Dashboard() {
       await fetchChapters(selectedBook.id);
       
       // Actualizar el libro seleccionado para reflejar el resumen detallado global
-      const updatedBooks = await (await fetch(`/api/libraries/${selectedLibrary?.id}/books`, {
+      const updatedBooksRes = await fetch(`/api/libraries/${selectedLibrary?.id}/books`, {
         headers: { Authorization: `Bearer ${token}` }
-      })).json();
+      });
+      const updatedBooks = await safeFetchJson(updatedBooksRes);
       const updatedBook = updatedBooks.find((b: any) => b.id === selectedBook.id);
       if (updatedBook) setSelectedBook(updatedBook);
 
@@ -259,10 +275,10 @@ export default function Dashboard() {
           });
           
           if (!res.ok) {
-            const data = await res.json();
+            const data = await safeFetchJson(res);
             throw new Error(data.error || "Error al crear el libro");
           }
-          const { id: bookId } = await res.json();
+          const { id: bookId } = await safeFetchJson(res);
 
           if (stopRef.current) return;
 
@@ -274,15 +290,16 @@ export default function Dashboard() {
             body: JSON.stringify({ content })
           });
           if (!idRes.ok) {
-            const data = await idRes.json();
+            const data = await safeFetchJson(idRes);
             throw new Error(data.error || "Error identificando el libro");
           }
           
           // Actualizar UI tras identificar
           await fetchBooks(selectedLibrary.id);
-          const booksAfterId = await (await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
+          const booksAfterIdRes = await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
             headers: { Authorization: `Bearer ${token}` }
-          })).json();
+          });
+          const booksAfterId = await safeFetchJson(booksAfterIdRes);
           const bookAfterId = booksAfterId.find((b: any) => b.id === bookId);
           if (bookAfterId) setSelectedBook(bookAfterId);
 
@@ -366,7 +383,7 @@ export default function Dashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!jobRes.ok) throw new Error("No se encontró el contenido del libro para este análisis.");
-      const { content } = await jobRes.json();
+      const { content } = await safeFetchJson(jobRes);
 
       const endpoints = [
         'identify', 'metadata', 'detect-chapters', 'characters', 'summary', 'map', 'podcast', 'extra'
@@ -379,14 +396,15 @@ export default function Dashboard() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await safeFetchJson(res);
         throw new Error(data.error || "Error en la fase de análisis");
       }
 
       await fetchBooks(selectedLibrary?.id || 0);
-      const updatedBooks = await (await fetch(`/api/libraries/${selectedLibrary?.id}/books`, {
+      const updatedBooksRes = await fetch(`/api/libraries/${selectedLibrary?.id}/books`, {
         headers: { Authorization: `Bearer ${token}` }
-      })).json();
+      });
+      const updatedBooks = await safeFetchJson(updatedBooksRes);
       const updatedBook = updatedBooks.find((b: any) => b.id === bookId);
       if (updatedBook) setSelectedBook(updatedBook);
 

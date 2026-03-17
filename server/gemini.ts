@@ -377,7 +377,7 @@ ${promptText}
                           (error.message && (error.message.includes("503") || error.message.includes("429")));
       
       if (isRetryable && attempt < MAX_RETRIES) {
-        const delay = attempt * 30000; // 30s, 60s...
+        const delay = attempt * 5000; // 5s, 10s, 15s
         console.warn(`[Gemini Backend] Attempt ${attempt} failed for ${phaseName} (Status: ${error.status}). Retrying in ${delay/1000}s...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
