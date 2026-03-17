@@ -8,6 +8,7 @@ export const analyzeBookBackend = async (
   initialState?: any,
   startChunk: number = 0
 ) => {
+  const safeContent = content || "";
   console.log("[Gemini Backend] Initializing GoogleGenAI...");
   
   if (onProgress) onProgress(5, "Inicializando motor de IA...");
@@ -44,7 +45,7 @@ export const analyzeBookBackend = async (
   if (!metadata) {
     console.log("[Gemini Backend] Phase 1: Extracting Book Metadata...");
     const metadataPrompt = `Extrae FICHA TÉCNICA: Título, Autor, ISBN, Sinopsis, Biografía autor, Bibliografía y Datos publicación.
-    CONTENIDO: ${content.substring(0, 100000)}`;
+    CONTENIDO: ${safeContent.substring(0, 100000)}`;
     
     metadata = await runAnalysis(ai, model, metadataPrompt, "METADATOS", {
       titulo: { type: Type.STRING },
@@ -61,13 +62,13 @@ export const analyzeBookBackend = async (
 
   // 2. ANÁLISIS POR BLOQUES (CAPÍTULOS Y PERSONAJES)
   const CHUNK_SIZE = 2000000; // Aumentado a 2M para reducir peticiones (Gemini 3 Flash tiene 1M+ tokens de contexto)
-  const totalLength = content.length;
+  const totalLength = safeContent.length;
   const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
   
   for (let i = startChunk; i < numChunks; i++) {
     const start = i * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, totalLength);
-    const chunk = content.substring(start, end);
+    const chunk = safeContent.substring(start, end);
 
     console.log(`[Gemini Backend] Phase 2: Analyzing chunk ${i + 1}/${numChunks}...`);
     
@@ -110,8 +111,8 @@ export const analyzeBookBackend = async (
   await new Promise(resolve => setTimeout(resolve, 45000));
 
   const synthesisPrompt = `Sintetiza análisis final de "${metadata.titulo}".
-  RESÚMENES: ${allChapterSummaries.substring(0, 50000)}
-  NOTAS: ${allCharacterNotes.substring(0, 20000)}
+  RESÚMENES: ${(allChapterSummaries || "").substring(0, 50000)}
+  NOTAS: ${(allCharacterNotes || "").substring(0, 20000)}
   TAREAS: 1. Resumen general. 2. Análisis personajes/evolución. 3. Mapa Mermaid. 4. Guiones Podcast (Personajes y Libro).`;
 
   const synthesis = await runAnalysis(ai, model, synthesisPrompt, "SÍNTESIS FINAL", {
@@ -140,9 +141,10 @@ export const analyzeBookBackend = async (
 };
 
 export const identifyBook = async (content: string) => {
+  const safeContent = content || "";
   const ai = getAI();
   const prompt = `Identifica TÍTULO y AUTOR del siguiente libro.
-  CONTENIDO: ${content.substring(0, 50000)}`;
+  CONTENIDO: ${safeContent.substring(0, 50000)}`;
   
   return runAnalysis(ai, "gemini-3-flash-preview", prompt, "IDENTIFICACIÓN", {
     titulo: { type: Type.STRING },
@@ -195,6 +197,7 @@ export const fetchBookMetadata = async (titulo: string, autor: string) => {
 };
 
 export const detectChapters = async (content: string) => {
+  const safeContent = content || "";
   const ai = getAI();
   const prompt = `Extrae la lista de TODOS los capítulos del libro.
   IMPORTANTE: Si el libro tiene Partes (ej: Parte 1, Parte 2), NO devuelvas solo las Partes. 
@@ -203,7 +206,7 @@ export const detectChapters = async (content: string) => {
   Si los capítulos no tienen nombre, usa "Capítulo 1", "Capítulo 2", etc.
   
   CONTENIDO:
-  ${content.substring(0, 400000)}`;
+  ${safeContent.substring(0, 400000)}`;
   
   const result = await runAnalysis(ai, "gemini-3-flash-preview", prompt, "DETECCIÓN CAPÍTULOS", {
     capitulos: { 
@@ -215,6 +218,7 @@ export const detectChapters = async (content: string) => {
 };
 
 export const summarizeSpecificChapter = async (content: string, chapterTitle: string) => {
+  const safeContent = content || "";
   const ai = getAI();
   // Usamos una ventana de contexto amplia para encontrar el capítulo
   const prompt = `Busca el capítulo titulado "${chapterTitle}" en el libro y genera:
@@ -222,7 +226,7 @@ export const summarizeSpecificChapter = async (content: string, chapterTitle: st
   2. NOTAS DE PERSONAJES: Quién aparece, qué hace y si hay evolución.
   
   CONTENIDO DEL LIBRO:
-  ${content.substring(0, 2000000)}`; // 2M caracteres para cubrir libros más extensos
+  ${safeContent.substring(0, 2000000)}`; // 2M caracteres para cubrir libros más extensos
   
   return runAnalysis(ai, "gemini-3-flash-preview", prompt, `RESUMEN ${chapterTitle}`, {
     resumen: { type: Type.STRING },
@@ -231,14 +235,15 @@ export const summarizeSpecificChapter = async (content: string, chapterTitle: st
 };
 
 export const analyzeChapters = async (content: string) => {
+  const safeContent = content || "";
   const ai = getAI();
   const CHUNK_SIZE = 2000000;
-  const totalLength = content.length;
+  const totalLength = safeContent.length;
   const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
   let allSummaries = "";
 
   for (let i = 0; i < numChunks; i++) {
-    const chunk = content.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    const chunk = safeContent.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
     const prompt = `Resume detalladamente por capítulos el siguiente fragmento del libro.
     CONTENIDO: ${chunk}`;
     
@@ -253,9 +258,10 @@ export const analyzeChapters = async (content: string) => {
 };
 
 export const generateGeneralSummary = async (chapters: string) => {
+  const safeChapters = chapters || "";
   const ai = getAI();
   const prompt = `Basándote en los resúmenes de capítulos, genera un RESUMEN GENERAL riguroso del libro.
-  CAPÍTULOS: ${chapters.substring(0, 50000)}`;
+  CAPÍTULOS: ${safeChapters.substring(0, 50000)}`;
   
   const result = await runAnalysis(ai, "gemini-3-flash-preview", prompt, "RESUMEN GENERAL", {
     resumen: { type: Type.STRING }
@@ -264,9 +270,10 @@ export const generateGeneralSummary = async (chapters: string) => {
 };
 
 export const analyzeCharactersPhased = async (chapters: string) => {
+  const safeChapters = chapters || "";
   const ai = getAI();
   const prompt = `Analiza los PERSONAJES y su EVOLUCIÓN basándote en los resúmenes de capítulos.
-  CAPÍTULOS: ${chapters.substring(0, 50000)}`;
+  CAPÍTULOS: ${safeChapters.substring(0, 50000)}`;
   
   return runAnalysis(ai, "gemini-3-flash-preview", prompt, "PERSONAJES", {
     personajes: { type: Type.STRING },
@@ -275,10 +282,12 @@ export const analyzeCharactersPhased = async (chapters: string) => {
 };
 
 export const generateMentalMap = async (summary: string, characters: string) => {
+  const safeSummary = summary || "";
+  const safeCharacters = characters || "";
   const ai = getAI();
   const prompt = `Crea un MAPA MENTAL en código MERMAID (graph TD) que conecte temas, personajes y trama.
-  RESUMEN: ${summary.substring(0, 10000)}
-  PERSONAJES: ${characters.substring(0, 10000)}`;
+  RESUMEN: ${safeSummary.substring(0, 10000)}
+  PERSONAJES: ${safeCharacters.substring(0, 10000)}`;
   
   const result = await runAnalysis(ai, "gemini-3-flash-preview", prompt, "MAPA MENTAL", {
     mermaid: { type: Type.STRING }
@@ -287,12 +296,14 @@ export const generateMentalMap = async (summary: string, characters: string) => 
 };
 
 export const generatePodcastScripts = async (summary: string, characters: string) => {
+  const safeSummary = summary || "";
+  const safeCharacters = characters || "";
   const ai = getAI();
   const prompt = `Genera dos guiones de PODCAST:
   1. Un monólogo explicando el libro.
   2. Un diálogo entre dos personajes comentando la historia.
-  RESUMEN: ${summary.substring(0, 10000)}
-  PERSONAJES: ${characters.substring(0, 10000)}`;
+  RESUMEN: ${safeSummary.substring(0, 10000)}
+  PERSONAJES: ${safeCharacters.substring(0, 10000)}`;
   
   return runAnalysis(ai, "gemini-3-flash-preview", prompt, "PODCAST", {
     libro: { type: Type.STRING },
@@ -301,11 +312,12 @@ export const generatePodcastScripts = async (summary: string, characters: string
 };
 
 export const generateExtraInfo = async (summary: string) => {
+  const safeSummary = summary || "";
   const ai = getAI();
   const prompt = `Genera información extra para el recuerdo emocional del libro:
   1. Sentimiento clave: ¿Qué sensación deja el libro al terminarlo?
   2. Citas clave: 3 frases memorables que capturen la esencia.
-  RESUMEN: ${summary.substring(0, 10000)}`;
+  RESUMEN: ${safeSummary.substring(0, 10000)}`;
   
   return runAnalysis(ai, "gemini-3-flash-preview", prompt, "EXTRA", {
     sentimiento: { type: Type.STRING },

@@ -102,6 +102,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS chapters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     book_id INTEGER NOT NULL,
+    part_name TEXT,
     title TEXT NOT NULL,
     summary TEXT,
     character_notes TEXT,
@@ -110,6 +111,13 @@ db.exec(`
     FOREIGN KEY (book_id) REFERENCES books(id)
   );
 `);
+
+// Add part_name to chapters if it doesn't exist
+try {
+  db.prepare("SELECT part_name FROM chapters LIMIT 1").get();
+} catch (e) {
+  db.exec("ALTER TABLE chapters ADD COLUMN part_name TEXT");
+}
 
 // Add library_id to books if it doesn't exist (migration for existing data)
 try {

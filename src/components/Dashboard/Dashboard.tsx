@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Book, Upload, Search, Trash2, Brain, Mic2, FileText, Network,
   Loader2, Plus, X, History, LogOut, ShieldAlert, Users, Library, RefreshCw,
-  BookOpen, Heart, CheckCircle2, Lock, List
+  BookOpen, Heart, CheckCircle2, Lock, List, Play
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { analyzeBook, BookAnalysis } from '../../services/geminiService';
@@ -20,7 +20,7 @@ function cn(...inputs: ClassValue[]) {
 interface SavedBook extends BookAnalysis {
   id: number;
   created_at: string;
-  status?: 'processing' | 'partial' | 'completed';
+  status: string;
   phase: number;
   sentimiento_clave?: string;
   citas_clave?: string;
@@ -35,6 +35,7 @@ interface Library {
 interface Chapter {
   id: number;
   book_id: number;
+  part_name?: string;
   title: string;
   summary: string;
   character_notes: string;
@@ -202,19 +203,15 @@ export default function Dashboard() {
     setError(null);
     
     try {
-      const jobRes = await fetch(`/api/books/${selectedBook.id}/job`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!jobRes.ok) throw new Error("No se encontró el contenido del libro.");
-      const { content } = await jobRes.json();
-
-      const res = await fetch(`/api/books/${selectedBook.id}/chapters/${chapterId}/summarize`, {
+      const res = await fetchWithTimeout(`/api/books/${selectedBook.id}/chapters/${chapterId}/summarize`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ content })
-      });
+        headers: { Authorization: `Bearer ${token}` }
+      }, 300000); // 5 min timeout
 
-      if (!res.ok) throw new Error("Error al resumir el capítulo");
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Error al resumir el capítulo");
+      }
 
       await fetchChapters(selectedBook.id);
       
@@ -233,6 +230,25 @@ export default function Dashboard() {
     }
   };
 
+  const summarizeAllPending = async () => {
+    if (!selectedBook || chapters.length === 0) return;
+    const pending = chapters.filter(c => !c.summary);
+    if (pending.length === 0) {
+      setSuccessMsg("Todos los capítulos ya tienen resumen.");
+      return;
+    }
+
+    setSuccessMsg(`Iniciando resumen de ${pending.length} capítulos...`);
+    for (const cap of pending) {
+      if (stopRef.current) break;
+      try {
+        await summarizeChapter(cap.id);
+      } catch (err) {
+        console.error(`Error resuminedo capítulo ${cap.id}:`, err);
+      }
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedLibrary) return;
@@ -247,6 +263,7 @@ export default function Dashboard() {
       const reader = new FileReader();
       reader.onload = async (event) => {
         const content = event.target?.result as string;
+        let bookId: number | null = null;
         try {
           // 1. Crear registro inicial
           const res = await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
@@ -257,7 +274,8 @@ export default function Dashboard() {
             },
             body: JSON.stringify({ titulo: 'Identificando...', autor: '...', status: 'processing' })
           });
-          const { id: bookId } = await res.json();
+          const { id } = await res.json();
+          bookId = id as number;
 
           // Guardar el contenido en un trabajo de análisis para poder reanudar fases
           await fetch(`/api/analyze`, {
@@ -270,63 +288,70 @@ export default function Dashboard() {
 
           // 2. Fase 0: Identificar
           setAnalysisMessage("Identificando título y autor...");
-          const idRes = await fetch(`/api/books/${bookId}/identify`, {
+          const idRes = await fetchWithTimeout(`/api/books/${bookId}/identify`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ content })
-          });
-          if (!idRes.ok) throw new Error("Error identificando el libro");
-          
-          // Actualizar UI tras identificar
-          await fetchBooks(selectedLibrary.id);
-          const booksAfterId = await (await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
             headers: { Authorization: `Bearer ${token}` }
-          })).json();
-          const bookAfterId = booksAfterId.find((b: any) => b.id === bookId);
-          if (bookAfterId) setSelectedBook(bookAfterId);
+          }, 300000);
+          if (!idRes.ok) {
+            const errorData = await idRes.json().catch(() => ({}));
+            throw new Error(errorData.error || "Error identificando el libro");
+          }
+          
+          const idInfo = await idRes.json();
+          // Actualizar localmente para feedback inmediato
+          setSelectedBook(prev => prev && prev.id === bookId ? { ...prev, titulo: idInfo.titulo, autor: idInfo.autor, phase: 0 } : prev);
+          await fetchBooks(selectedLibrary.id);
 
           if (stopRef.current) return;
 
           // 3. Fase 1: Metadatos (Google Search)
           setAnalysisMessage("Buscando ficha técnica en la web...");
-          const metaRes = await fetch(`/api/books/${bookId}/metadata`, {
+          const metaRes = await fetchWithTimeout(`/api/books/${bookId}/metadata`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}` }
-          });
-          if (!metaRes.ok) throw new Error("Error buscando metadatos");
+          }, 300000);
+          if (!metaRes.ok) {
+            const errorData = await metaRes.json().catch(() => ({}));
+            const serverError = errorData.error || `Error del servidor (${metaRes.status})`;
+            throw new Error(serverError);
+          }
 
-          if (stopRef.current) return;
-
-          // Actualizar UI tras metadatos
+          const metaInfo = await metaRes.json();
+          // Actualizar localmente
+          setSelectedBook(prev => prev && prev.id === bookId ? { ...prev, ...metaInfo, phase: 1 } : prev);
           await fetchBooks(selectedLibrary.id);
-          const booksAfterMeta = await (await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
-            headers: { Authorization: `Bearer ${token}` }
-          })).json();
-          const bookAfterMeta = booksAfterMeta.find((b: any) => b.id === bookId);
-          if (bookAfterMeta) setSelectedBook(bookAfterMeta);
 
           if (stopRef.current) return;
 
           // 4. Fase 2: Detectar capítulos
           setAnalysisMessage("Detectando capítulos...");
-          const detectRes = await fetch(`/api/books/${bookId}/detect-chapters`, {
+          const detectRes = await fetchWithTimeout(`/api/books/${bookId}/detect-chapters`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ content })
-          });
-          if (!detectRes.ok) throw new Error("Error detectando capítulos");
-          
-          await fetchBooks(selectedLibrary.id);
-          const finalBooks = await (await fetch(`/api/libraries/${selectedLibrary.id}/books`, {
             headers: { Authorization: `Bearer ${token}` }
-          })).json();
-          const finalBook = finalBooks.find((b: any) => b.id === bookId);
-          if (finalBook) setSelectedBook(finalBook);
+          }, 300000);
+          if (!detectRes.ok) {
+            const errorData = await detectRes.json().catch(() => ({}));
+            throw new Error(errorData.error || "Error detectando capítulos");
+          }
+          
+          const detectInfo = await detectRes.json();
+          // Actualizar localmente
+          setSelectedBook(prev => prev && prev.id === bookId ? { ...prev, resumen_capitulos: JSON.stringify(detectInfo.structure), phase: 2 } : prev);
+          await fetchBooks(selectedLibrary.id);
+          await fetchChapters(bookId);
           
           setSuccessMsg('Libro identificado y capítulos detectados. Ahora puedes proceder con el resumen.');
         } catch (err: any) {
           if (!stopRef.current) {
             setError(err.message || "Error analizando el libro.");
+            // Actualizar status para que no se quede bloqueado en 'processing'
+            if (bookId) {
+              fetch(`/api/books/${bookId}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ status: 'completed' })
+              }).then(() => fetchBooks(selectedLibrary.id));
+            }
           }
           console.error(err);
         } finally {
@@ -338,6 +363,25 @@ export default function Dashboard() {
     } catch (err) {
       setError('Error al leer el archivo');
       setIsAnalyzing(false);
+    }
+  };
+
+  const fetchWithTimeout = async (url: string, options: any = {}, timeout = 120000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
+      clearTimeout(id);
+      return response;
+    } catch (error: any) {
+      clearTimeout(id);
+      if (error.name === 'AbortError') {
+        throw new Error('La operación ha tardado demasiado tiempo. Por favor, inténtalo de nuevo.');
+      }
+      throw error;
     }
   };
 
@@ -360,24 +404,30 @@ export default function Dashboard() {
     setAnalysisMessage(phaseMessages[phase] || "Procesando...");
 
     try {
-      // Obtener contenido del libro desde el trabajo de análisis
-      const jobRes = await fetch(`/api/books/${bookId}/job`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!jobRes.ok) throw new Error("No se encontró el contenido del libro para este análisis.");
-      const { content } = await jobRes.json();
+      // Si intentamos ir a la fase 3 (Personajes), verificar que existan capítulos
+      if (phase === 3) {
+        const chaptersRes = await fetch(`/api/books/${bookId}/chapters`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const chaptersData = await chaptersRes.json();
+        if (!chaptersData || chaptersData.length === 0) {
+          throw new Error("No se han detectado capítulos. Debes completar la Fase 2 con éxito antes de analizar personajes.");
+        }
+      }
 
       const endpoints = [
         'identify', 'metadata', 'detect-chapters', 'characters', 'summary', 'map', 'podcast', 'extra'
       ];
 
-      const res = await fetch(`/api/books/${bookId}/${endpoints[phase]}`, {
+      const res = await fetchWithTimeout(`/api/books/${bookId}/${endpoints[phase]}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ content })
-      });
+        headers: { Authorization: `Bearer ${token}` }
+      }, 180000); // 3 min timeout for heavy analysis
 
-      if (!res.ok) throw new Error("Error en la fase de análisis");
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Error en la fase de análisis");
+      }
 
       await fetchBooks(selectedLibrary?.id || 0);
       const updatedBooks = await (await fetch(`/api/libraries/${selectedLibrary?.id}/books`, {
@@ -385,6 +435,10 @@ export default function Dashboard() {
       })).json();
       const updatedBook = updatedBooks.find((b: any) => b.id === bookId);
       if (updatedBook) setSelectedBook(updatedBook);
+      
+      if (phase === 2) {
+        await fetchChapters(bookId);
+      }
 
       setSuccessMsg('Fase completada con éxito');
     } catch (err: any) {
@@ -642,13 +696,40 @@ export default function Dashboard() {
                 exit={{ opacity: 0, y: -10 }}
                 className="p-8 max-w-5xl mx-auto"
               >
-                {selectedBook.status === 'processing' && selectedBook.titulo === 'Analizando nuevo libro...' ? (
+                {selectedBook.status === 'processing' ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center">
-                    <Loader2 className="w-12 h-12 text-[#F27D26] animate-spin mb-6" />
-                    <h2 className="text-3xl font-bold uppercase tracking-tighter mb-4">Análisis en curso</h2>
-                    <p className="text-[#8E9299] max-w-md font-serif italic">
-                      Estamos procesando el archivo. Los resultados aparecerán aquí automáticamente en cuanto se extraiga la información básica.
-                    </p>
+                    {error ? (
+                      <>
+                        <ShieldAlert className="w-12 h-12 text-red-500 mb-6" />
+                        <h2 className="text-3xl font-bold uppercase tracking-tighter mb-4 text-red-500">Error en el Análisis</h2>
+                        <p className="text-[#8E9299] max-w-md font-serif italic mb-8">
+                          {error}
+                        </p>
+                        <button 
+                          onClick={() => {
+                            setError(null);
+                            // Intentar reanudar desde la fase actual
+                            runPhase(selectedBook.id, selectedBook.phase + 1);
+                          }}
+                          className="px-6 py-3 bg-[#F27D26] text-black font-bold uppercase tracking-widest rounded-xl hover:bg-[#F27D26]/80 transition-all"
+                        >
+                          Reintentar Fase Actual
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <Loader2 className="w-12 h-12 text-[#F27D26] animate-spin mb-6" />
+                        <h2 className="text-3xl font-bold uppercase tracking-tighter mb-4">Análisis en curso</h2>
+                        <p className="text-[#8E9299] max-w-md font-serif italic">
+                          Estamos procesando el archivo. Los resultados aparecerán aquí automáticamente en cuanto se extraiga la información básica.
+                        </p>
+                        {analysisMessage && (
+                          <p className="mt-4 text-[#F27D26] font-mono text-xs animate-pulse">
+                            {analysisMessage}
+                          </p>
+                        )}
+                      </>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -659,13 +740,28 @@ export default function Dashboard() {
                           <h3 className="text-xs font-mono text-[#F27D26] uppercase tracking-widest mb-1">Progreso del Análisis por Fases</h3>
                           <p className="text-[10px] text-[#8E9299] uppercase">Completa cada etapa para desbloquear la siguiente</p>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono text-[#8E9299]">FASE {selectedBook.phase}/7</span>
-                          <div className="w-32 h-1 bg-[#222] rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-[#F27D26] transition-all duration-500" 
-                              style={{ width: `${(selectedBook.phase / 7) * 100}%` }}
-                            />
+                        <div className="flex items-center gap-6">
+                          {selectedBook.phase < 7 && (
+                            <button
+                              disabled={isPhaseLoading}
+                              onClick={() => runPhase(selectedBook.id, selectedBook.phase + 1)}
+                              className="px-4 py-2 bg-[#F27D26] text-black text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-[#F27D26]/80 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {isPhaseLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 fill-current" />}
+                              Continuar Análisis Automático
+                            </button>
+                          )}
+                          <div className="flex flex-col items-end">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-[10px] font-mono text-[#8E9299]">FASE {selectedBook.phase}/7</span>
+                              {isPhaseLoading && <span className="text-[10px] font-mono text-[#F27D26] animate-pulse">{analysisMessage}</span>}
+                            </div>
+                            <div className="w-32 h-1 bg-[#222] rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-[#F27D26] transition-all duration-500" 
+                                style={{ width: `${(selectedBook.phase / 7) * 100}%` }}
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -838,60 +934,103 @@ export default function Dashboard() {
                   {activeTab === 'capitulos' && (
                     <div className="space-y-8">
                       <section>
-                        <h4 className="text-[10px] font-mono text-[#F27D26] uppercase tracking-[0.2em] mb-4">Estructura y Resúmenes Individuales</h4>
+                        <div className="flex items-center justify-between mb-4">
+                          <h4 className="text-[10px] font-mono text-[#F27D26] uppercase tracking-[0.2em]">Estructura y Resúmenes Individuales</h4>
+                          <div className="flex items-center gap-4">
+                            <button 
+                              onClick={() => fetchChapters(selectedBook.id)}
+                              className="text-[10px] font-mono text-[#8E9299] hover:text-[#F27D26] transition-colors flex items-center gap-1"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              Recargar
+                            </button>
+                            {chapters.some(c => !c.summary) && (
+                              <button 
+                                onClick={summarizeAllPending}
+                                disabled={summarizingChapterId !== null}
+                                className="text-[10px] font-mono text-[#F27D26] hover:underline flex items-center gap-1 disabled:opacity-50"
+                              >
+                                <Play className="w-3 h-3 fill-current" />
+                                Resumir todos los pendientes
+                              </button>
+                            )}
+                          </div>
+                        </div>
                         <div className="bg-[#0D0D0D] border border-[#141414] p-6 rounded-xl">
                           {chapters.length > 0 ? (
-                            <div className="space-y-6">
-                              {chapters.map((cap, idx) => (
-                                <div key={cap.id} className="bg-[#141414] rounded-xl border border-[#222] overflow-hidden">
-                                  <div className="flex items-center justify-between p-4 bg-[#1A1A1A] border-b border-[#222]">
-                                    <div className="flex items-center gap-3">
-                                      <span className="text-[10px] font-mono text-[#F27D26] w-6">{idx + 1}</span>
-                                      <span className="text-sm font-bold text-[#E4E3E0]">{cap.title}</span>
-                                    </div>
-                                    <button
-                                      disabled={summarizingChapterId === cap.id}
-                                      onClick={() => summarizeChapter(cap.id)}
-                                      className={cn(
-                                        "flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-all",
-                                        cap.summary 
-                                          ? "bg-[#F27D26]/10 text-[#F27D26] border border-[#F27D26]/30" 
-                                          : "bg-[#F27D26] text-black hover:bg-[#F27D26]/80"
-                                      )}
-                                    >
-                                      {summarizingChapterId === cap.id ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                      ) : cap.summary ? (
-                                        <>
-                                          <RefreshCw className="w-3 h-3" />
-                                          Actualizar Resumen
-                                        </>
-                                      ) : (
-                                        <>
-                                          <Plus className="w-3 h-3" />
-                                          Generar Resumen
-                                        </>
-                                      )}
-                                    </button>
-                                  </div>
-                                  
-                                  {cap.summary && (
-                                    <div className="p-6 leading-relaxed text-[#B0B0B0] font-serif text-lg border-b border-[#222]/50">
-                                      <Markdown>{cap.summary}</Markdown>
+                            <div className="space-y-10">
+                              {Object.entries(
+                                chapters.reduce((acc, cap) => {
+                                  const part = cap.part_name || "Sin Parte";
+                                  if (!acc[part]) acc[part] = [];
+                                  acc[part].push(cap);
+                                  return acc;
+                                }, {} as Record<string, Chapter[]>)
+                              ).map(([partName, partChapters]) => (
+                                <div key={partName} className="space-y-4">
+                                  {partName !== "Sin Parte" && (
+                                    <div className="flex items-center gap-4 mb-2">
+                                      <div className="h-px bg-[#F27D26]/30 flex-1" />
+                                      <h5 className="text-[11px] font-bold text-[#F27D26] uppercase tracking-[0.3em] whitespace-nowrap">
+                                        {partName}
+                                      </h5>
+                                      <div className="h-px bg-[#F27D26]/30 flex-1" />
                                     </div>
                                   )}
-                                  
-                                  {cap.character_notes && (
-                                    <div className="p-4 bg-[#0D0D0D] flex items-start gap-3">
-                                      <Users className="w-4 h-4 text-[#F27D26] mt-1 shrink-0" />
-                                      <div>
-                                        <h5 className="text-[9px] font-mono text-[#F27D26] uppercase mb-1">Notas de Personajes (Guardadas)</h5>
-                                        <div className="text-[11px] text-[#8E9299]">
-                                          <Markdown>{cap.character_notes}</Markdown>
+                                  <div className="space-y-6">
+                                    {partChapters.map((cap, idx) => (
+                                      <div key={cap.id} className="bg-[#141414] rounded-xl border border-[#222] overflow-hidden">
+                                        <div className="flex items-center justify-between p-4 bg-[#1A1A1A] border-b border-[#222]">
+                                          <div className="flex items-center gap-3">
+                                            <span className="text-[10px] font-mono text-[#F27D26] w-6">{cap.order_index + 1}</span>
+                                            <span className="text-sm font-bold text-[#E4E3E0]">{cap.title}</span>
+                                          </div>
+                                          <button
+                                            disabled={summarizingChapterId === cap.id}
+                                            onClick={() => summarizeChapter(cap.id)}
+                                            className={cn(
+                                              "flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-all",
+                                              cap.summary 
+                                                ? "bg-[#F27D26]/10 text-[#F27D26] border border-[#F27D26]/30" 
+                                                : "bg-[#F27D26] text-black hover:bg-[#F27D26]/80"
+                                            )}
+                                          >
+                                            {summarizingChapterId === cap.id ? (
+                                              <Loader2 className="w-3 h-3 animate-spin" />
+                                            ) : cap.summary ? (
+                                              <>
+                                                <RefreshCw className="w-3 h-3" />
+                                                Actualizar Resumen
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Plus className="w-3 h-3" />
+                                                Generar Resumen
+                                              </>
+                                            )}
+                                          </button>
                                         </div>
+                                        
+                                        {cap.summary && (
+                                          <div className="p-6 leading-relaxed text-[#B0B0B0] font-serif text-lg border-b border-[#222]/50">
+                                            <Markdown>{cap.summary}</Markdown>
+                                          </div>
+                                        )}
+                                        
+                                        {cap.character_notes && (
+                                          <div className="p-4 bg-[#0D0D0D] flex items-start gap-3">
+                                            <Users className="w-4 h-4 text-[#F27D26] mt-1 shrink-0" />
+                                            <div>
+                                              <h5 className="text-[9px] font-mono text-[#F27D26] uppercase mb-1">Notas de Personajes (Guardadas)</h5>
+                                              <div className="text-[11px] text-[#8E9299]">
+                                                <Markdown>{cap.character_notes}</Markdown>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )}
                                       </div>
-                                    </div>
-                                  )}
+                                    ))}
+                                  </div>
                                 </div>
                               ))}
                             </div>

@@ -436,6 +436,9 @@ router.delete("/books/:id", authMiddleware, (req: any, res) => {
 router.post("/books/:id/identify", authMiddleware, async (req: any, res) => {
   const { content } = req.body;
   const bookId = req.params.id;
+  if (!content) {
+    return res.status(400).json({ error: "El contenido del libro es obligatorio para la identificación." });
+  }
   try {
     const info = await identifyBook(content);
     db.prepare("UPDATE books SET titulo = ?, autor = ?, phase = 0 WHERE id = ?").run(info.titulo, info.autor, bookId);
