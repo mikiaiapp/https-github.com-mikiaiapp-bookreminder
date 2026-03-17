@@ -2,6 +2,29 @@ import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import path from "path";
 
+function getAI() {
+  let apiKey = process.env.GEMINI_API_KEY || "";
+  
+  // Try to read key from persistent file first (more secure for NAS/Docker)
+  const keyFilePath = "/app/data/gemini_key.txt";
+  try {
+    if (fs.existsSync(keyFilePath)) {
+      const fileKey = fs.readFileSync(keyFilePath, "utf8").trim();
+      if (fileKey) {
+        apiKey = fileKey;
+      }
+    }
+  } catch (err) {
+    // Ignore errors reading the file
+  }
+
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not set");
+  }
+  
+  return new GoogleGenAI({ apiKey });
+}
+
 export const analyzeBookBackend = async (
   content: string, 
   onProgress?: (progress: number, message: string, partialData?: any, lastChunk?: number) => void,
@@ -12,28 +35,7 @@ export const analyzeBookBackend = async (
   
   if (onProgress) onProgress(5, "Inicializando motor de IA...");
   
-  let apiKey = process.env.GEMINI_API_KEY || "";
-  
-  // Try to read key from persistent file first (more secure for NAS/Docker)
-  const keyFilePath = "/app/data/gemini_key.txt";
-  try {
-    if (fs.existsSync(keyFilePath)) {
-      const fileKey = fs.readFileSync(keyFilePath, "utf8").trim();
-      if (fileKey) {
-        apiKey = fileKey;
-        console.log("[Gemini Backend] API Key loaded from /app/data/gemini_key.txt");
-      }
-    }
-  } catch (err) {
-    console.log("[Gemini Backend] Could not read key file, falling back to env var");
-  }
-
-  if (!apiKey) {
-    console.error("[Gemini Backend] CRITICAL ERROR: GEMINI_API_KEY is not set!");
-    throw new Error("GEMINI_API_KEY is not set");
-  }
-  
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getAI();
   const model = "gemini-3-flash-preview";
   
   let metadata = initialState?.metadata || null;
@@ -196,39 +198,37 @@ export const fetchBookMetadata = async (titulo: string, autor: string) => {
 
 export const detectChapters = async (content: string) => {
   const ai = getAI();
-  const head = content.substring(0, 400000);
-  const tail = content.substring(Math.max(0, content.length - 100000));
-  const targetedContent = `--- INICIO DEL LIBRO ---\n${head}\n\n... [CONTENIDO OMITIDO] ...\n\n--- FINAL DEL LIBRO ---\n${tail}`;
+  // Tomamos una muestra más representativa del inicio para encontrar el índice
+  const head = content.substring(0, 600000);
+  const tail = content.substring(Math.max(0, content.length - 200000));
+  const targetedContent = `--- INICIO DEL LIBRO (Muestra amplia) ---\n${head}\n\n... [CONTENIDO OMITIDO] ...\n\n--- FINAL DEL LIBRO ---\n${tail}`;
 
-  const prompt = `Extrae la estructura de capítulos del libro.
-  IMPORTANTE: Identifica si el libro está dividido en PARTES (ej: Parte I, Libro Primero, etc.).
-  Si hay partes, agrupa los capítulos dentro de ellas.
-  Si no hay partes, usa una cadena vacía "" para el nombre de la parte.
+  const prompt = `Analiza el texto proporcionado y extrae la estructura completa de capítulos del libro.
   
-  Ejemplo de salida esperada:
-  [
-    { "part": "Parte 1: El Comienzo", "chapters": ["Capítulo 1", "Capítulo 2"] },
-    { "part": "Parte 2: El Nudo", "chapters": ["Capítulo 3", "Capítulo 4"] }
-  ]
-  O si no hay partes:
-  [
-    { "part": "", "chapters": ["Capítulo 1", "Capítulo 2", ...] }
-  ]
-
-  CONTENIDO (Fragmentos del inicio y final):
+  INSTRUCCIONES:
+  1. Busca una tabla de contenidos o índice al principio.
+  2. Si no hay índice, identifica los encabezados de capítulos a lo largo del texto.
+  3. Identifica si el libro está dividido en PARTES, SECCIONES o LIBROS (ej: "Parte I: El Despertar", "Libro Segundo", etc.).
+  4. Si hay divisiones mayores (partes), agrupa los capítulos dentro de ellas.
+  5. Si NO hay divisiones mayores, usa una cadena vacía "" para el campo "part".
+  6. Si no logras detectar capítulos específicos, pero el texto es claramente un libro, crea un único elemento con part: "" y un capítulo llamado "Contenido Principal".
+  
+  IMPORTANTE: Devuelve una lista de objetos con "part" y "chapters" (lista de strings).
+  
+  CONTENIDO:
   ${targetedContent}`;
   
-  const result = await runAnalysis(ai, "gemini-3-flash-preview", prompt, "DETECCIÓN ESTRUCTURA", {
+  const result = await runAnalysis(ai, "gemini-3.1-pro-preview", prompt, "DETECCIÓN ESTRUCTURA", {
     estructura: { 
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
-          part: { type: Type.STRING, description: "Nombre de la parte o cadena vacía" },
+          part: { type: Type.STRING, description: "Nombre de la parte/sección o cadena vacía" },
           chapters: { 
             type: Type.ARRAY, 
             items: { type: Type.STRING },
-            description: "Lista de títulos de capítulos"
+            description: "Lista de títulos de capítulos encontrados"
           }
         },
         required: ["part", "chapters"]
@@ -377,18 +377,6 @@ export const generateExtraInfo = async (summary: string) => {
     citas: { type: Type.STRING }
   });
 };
-
-function getAI() {
-  let apiKey = process.env.GEMINI_API_KEY || "";
-  const keyFilePath = "/app/data/gemini_key.txt";
-  try {
-    if (fs.existsSync(keyFilePath)) {
-      apiKey = fs.readFileSync(keyFilePath, "utf8").trim();
-    }
-  } catch (err) {}
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-  return new GoogleGenAI({ apiKey });
-}
 
 async function runAnalysis(ai: any, model: string, promptText: string, phaseName: string, schemaProperties: any) {
   const prompt = `
