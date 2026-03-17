@@ -203,19 +203,15 @@ export default function Dashboard() {
     setError(null);
     
     try {
-      const jobRes = await fetch(`/api/books/${selectedBook.id}/job`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!jobRes.ok) throw new Error("No se encontró el contenido del libro.");
-      const { content } = await jobRes.json();
-
-      const res = await fetch(`/api/books/${selectedBook.id}/chapters/${chapterId}/summarize`, {
+      const res = await fetchWithTimeout(`/api/books/${selectedBook.id}/chapters/${chapterId}/summarize`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ content })
-      });
+        headers: { Authorization: `Bearer ${token}` }
+      }, 180000); // 3 min timeout
 
-      if (!res.ok) throw new Error("Error al resumir el capítulo");
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Error al resumir el capítulo");
+      }
 
       await fetchChapters(selectedBook.id);
       
@@ -294,8 +290,7 @@ export default function Dashboard() {
           setAnalysisMessage("Identificando título y autor...");
           const idRes = await fetchWithTimeout(`/api/books/${bookId}/identify`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ content })
+            headers: { Authorization: `Bearer ${token}` }
           });
           if (!idRes.ok) {
             const errorData = await idRes.json().catch(() => ({}));
@@ -339,8 +334,7 @@ export default function Dashboard() {
           setAnalysisMessage("Detectando capítulos...");
           const detectRes = await fetchWithTimeout(`/api/books/${bookId}/detect-chapters`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ content })
+            headers: { Authorization: `Bearer ${token}` }
           }, 180000);
           if (!detectRes.ok) {
             const errorData = await detectRes.json().catch(() => ({}));
@@ -420,12 +414,16 @@ export default function Dashboard() {
     setAnalysisMessage(phaseMessages[phase] || "Procesando...");
 
     try {
-      // Obtener contenido del libro desde el trabajo de análisis
-      const jobRes = await fetchWithTimeout(`/api/books/${bookId}/job`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!jobRes.ok) throw new Error("No se encontró el contenido del libro para este análisis.");
-      const { content } = await jobRes.json();
+      // Si intentamos ir a la fase 3 (Personajes), verificar que existan capítulos
+      if (phase === 3) {
+        const chaptersRes = await fetch(`/api/books/${bookId}/chapters`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const chaptersData = await chaptersRes.json();
+        if (!chaptersData || chaptersData.length === 0) {
+          throw new Error("No se han detectado capítulos. Debes completar la Fase 2 con éxito antes de analizar personajes.");
+        }
+      }
 
       const endpoints = [
         'identify', 'metadata', 'detect-chapters', 'characters', 'summary', 'map', 'podcast', 'extra'
@@ -433,8 +431,7 @@ export default function Dashboard() {
 
       const res = await fetchWithTimeout(`/api/books/${bookId}/${endpoints[phase]}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ content })
+        headers: { Authorization: `Bearer ${token}` }
       }, 180000); // 3 min timeout for heavy analysis
 
       if (!res.ok) {

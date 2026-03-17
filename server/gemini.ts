@@ -240,13 +240,38 @@ export const detectChapters = async (content: string) => {
 
 export const summarizeSpecificChapter = async (content: string, chapterTitle: string) => {
   const ai = getAI();
-  // Usamos una ventana de contexto amplia para encontrar el capítulo
-  const prompt = `Busca el capítulo titulado "${chapterTitle}" en el libro y genera:
-  1. Un RESUMEN DETALLADO del capítulo (modo spoiler).
-  2. NOTAS DE PERSONAJES: Quién aparece, qué hace y si hay evolución.
   
-  CONTENIDO DEL LIBRO:
-  ${content.substring(0, 4000000)}`; // 4M caracteres para cubrir libros más extensos
+  // Intentar encontrar la posición del capítulo para centrar el contexto
+  const lowerContent = content.toLowerCase();
+  const lowerTitle = chapterTitle.toLowerCase();
+  
+  // Buscamos la primera ocurrencia que NO sea el índice (asumiendo que el índice está al principio)
+  let index = lowerContent.indexOf(lowerTitle);
+  // Si está muy al principio (primeros 10000 caracteres), buscamos la siguiente ocurrencia
+  // ya que la primera suele ser el índice o tabla de contenidos
+  if (index !== -1 && index < 10000) {
+    const nextIndex = lowerContent.indexOf(lowerTitle, index + lowerTitle.length);
+    if (nextIndex !== -1) index = nextIndex;
+  }
+  
+  let targetedContent = "";
+  if (index !== -1) {
+    // Tomamos un bloque de 1.5M caracteres desde donde empieza el capítulo
+    // para asegurar que cubrimos el capítulo entero y algo de contexto posterior
+    targetedContent = content.substring(Math.max(0, index - 1000), index + 1500000);
+  } else {
+    // Si no se encuentra por título exacto, usamos los primeros 2M como fallback
+    targetedContent = content.substring(0, 2000000);
+  }
+
+  const prompt = `Analiza el siguiente fragmento del libro centrándote en el capítulo titulado "${chapterTitle}".
+  
+  TAREA:
+  1. Genera un RESUMEN DETALLADO de este capítulo específico (modo spoiler).
+  2. Identifica los PERSONAJES que aparecen en este capítulo, sus acciones clave y cualquier evolución relevante.
+  
+  FRAGMENTO DEL LIBRO:
+  ${targetedContent}`;
   
   return runAnalysis(ai, "gemini-3-flash-preview", prompt, `RESUMEN ${chapterTitle}`, {
     resumen: { type: Type.STRING },

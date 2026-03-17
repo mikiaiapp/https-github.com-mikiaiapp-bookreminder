@@ -445,10 +445,12 @@ router.delete("/books/:id", authMiddleware, (req: any, res) => {
 // --- PHASED ANALYSIS ROUTES ---
 
 router.post("/books/:id/identify", authMiddleware, async (req: any, res) => {
-  const { content } = req.body;
   const bookId = req.params.id;
   try {
-    const info = await identifyBook(content);
+    const job = db.prepare("SELECT content FROM analysis_jobs WHERE book_id = ?").get(bookId) as any;
+    if (!job?.content) return res.status(400).json({ error: "Contenido del libro no encontrado en la base de datos." });
+    
+    const info = await identifyBook(job.content);
     db.prepare("UPDATE books SET titulo = ?, autor = ?, phase = 0 WHERE id = ?").run(info.titulo, info.autor, bookId);
     res.json(info);
   } catch (err: any) {
@@ -479,10 +481,12 @@ router.post("/books/:id/metadata", authMiddleware, async (req: any, res) => {
 });
 
 router.post("/books/:id/detect-chapters", authMiddleware, async (req: any, res) => {
-  const { content } = req.body;
   const bookId = req.params.id;
   try {
-    const structure = await detectChapters(content);
+    const job = db.prepare("SELECT content FROM analysis_jobs WHERE book_id = ?").get(bookId) as any;
+    if (!job?.content) return res.status(400).json({ error: "Contenido del libro no encontrado." });
+
+    const structure = await detectChapters(job.content);
     
     if (!structure || structure.length === 0 || (structure.length === 1 && structure[0].chapters.length === 0)) {
       throw new Error("No se pudieron detectar capítulos en el libro. Asegúrate de que el archivo tenga una estructura clara o intenta subirlo de nuevo.");
@@ -518,13 +522,15 @@ router.get("/books/:id/chapters", authMiddleware, (req: any, res) => {
 
 router.post("/books/:id/chapters/:chapterId/summarize", authMiddleware, async (req: any, res) => {
   const { id: bookId, chapterId } = req.params;
-  const { content } = req.body;
   
   try {
+    const job = db.prepare("SELECT content FROM analysis_jobs WHERE book_id = ?").get(bookId) as any;
+    if (!job?.content) return res.status(400).json({ error: "Contenido del libro no encontrado." });
+
     const chapter = db.prepare("SELECT * FROM chapters WHERE id = ?").get(chapterId) as any;
     if (!chapter) return res.status(404).json({ error: "Capítulo no encontrado" });
 
-    const result = await summarizeSpecificChapter(content, chapter.title);
+    const result = await summarizeSpecificChapter(job.content, chapter.title);
     
     db.prepare("UPDATE chapters SET summary = ?, character_notes = ? WHERE id = ?")
       .run(result.resumen, result.notas_personajes, chapterId);
