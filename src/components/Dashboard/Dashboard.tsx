@@ -206,7 +206,7 @@ export default function Dashboard() {
       const res = await fetchWithTimeout(`/api/books/${selectedBook.id}/chapters/${chapterId}/summarize`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
-      }, 180000); // 3 min timeout
+      }, 300000); // 5 min timeout
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
@@ -335,7 +335,7 @@ export default function Dashboard() {
           const detectRes = await fetchWithTimeout(`/api/books/${bookId}/detect-chapters`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}` }
-          }, 180000);
+          }, 300000); // 5 min timeout
           if (!detectRes.ok) {
             const errorData = await detectRes.json().catch(() => ({}));
             throw new Error(errorData.error || "Error detectando capítulos");

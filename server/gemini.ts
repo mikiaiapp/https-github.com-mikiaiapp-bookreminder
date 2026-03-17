@@ -247,6 +247,20 @@ export const summarizeSpecificChapter = async (content: string, chapterTitle: st
   
   // Buscamos la primera ocurrencia que NO sea el índice (asumiendo que el índice está al principio)
   let index = lowerContent.indexOf(lowerTitle);
+  
+  // Si no se encuentra, intentar buscar solo el número si el título es "Capítulo X"
+  if (index === -1 && lowerTitle.includes('capítulo')) {
+    const match = lowerTitle.match(/capítulo\s+(\d+)/);
+    if (match) {
+      const num = match[1];
+      const altTitles = [`capitulo ${num}`, `cap. ${num}`, `ch. ${num}`, `chapter ${num}`, `\n${num}\n` ];
+      for (const alt of altTitles) {
+        index = lowerContent.indexOf(alt);
+        if (index !== -1) break;
+      }
+    }
+  }
+
   // Si está muy al principio (primeros 10000 caracteres), buscamos la siguiente ocurrencia
   // ya que la primera suele ser el índice o tabla de contenidos
   if (index !== -1 && index < 10000) {
@@ -256,19 +270,21 @@ export const summarizeSpecificChapter = async (content: string, chapterTitle: st
   
   let targetedContent = "";
   if (index !== -1) {
-    // Tomamos un bloque de 1.5M caracteres desde donde empieza el capítulo
+    // Tomamos un bloque de 2M caracteres desde donde empieza el capítulo
     // para asegurar que cubrimos el capítulo entero y algo de contexto posterior
-    targetedContent = content.substring(Math.max(0, index - 1000), index + 1500000);
+    targetedContent = content.substring(Math.max(0, index - 2000), index + 2000000);
   } else {
-    // Si no se encuentra por título exacto, usamos los primeros 2M como fallback
-    targetedContent = content.substring(0, 2000000);
+    // Si no se encuentra por título exacto, usamos los primeros 2.5M como fallback
+    targetedContent = content.substring(0, 2500000);
   }
 
   const prompt = `Analiza el siguiente fragmento del libro centrándote en el capítulo titulado "${chapterTitle}".
   
   TAREA:
-  1. Genera un RESUMEN DETALLADO de este capítulo específico (modo spoiler).
-  2. Identifica los PERSONAJES que aparecen en este capítulo, sus acciones clave y cualquier evolución relevante.
+  1. Identifica dónde comienza y termina el capítulo "${chapterTitle}" en el texto proporcionado.
+  2. Genera un RESUMEN DETALLADO de este capítulo específico (modo spoiler).
+  3. Identifica los PERSONAJES que aparecen en este capítulo, sus acciones clave y cualquier evolución relevante.
+  4. Si el capítulo no parece estar en el texto proporcionado, indica que no se encontró suficiente información pero intenta resumir lo que veas que sea relevante al título.
   
   FRAGMENTO DEL LIBRO:
   ${targetedContent}`;
@@ -410,17 +426,17 @@ ${promptText}
       lastError = error;
       // 503: Service Unavailable (High demand)
       // 429: Quota Exceeded
-      const isRetryable = error.status === 503 || error.status === 429 || 
-                          (error.message && (error.message.includes("503") || error.message.includes("429")));
+      const isRateLimit = error.status === 429 || (error.message && (error.message.includes("429") || error.message.toLowerCase().includes("quota")));
+      const isServiceUnavailable = error.status === 503 || (error.message && (error.message.includes("503") || error.message.toLowerCase().includes("overloaded")));
       
-      if (isRetryable && attempt < MAX_RETRIES) {
-        const delay = attempt * 30000; // 30s, 60s...
+      if ((isRateLimit || isServiceUnavailable) && attempt < MAX_RETRIES) {
+        const delay = isRateLimit ? attempt * 60000 : attempt * 10000; // 60s para cuota, 10s para sobrecarga
         console.warn(`[Gemini Backend] Attempt ${attempt} failed for ${phaseName} (Status: ${error.status}). Retrying in ${delay/1000}s...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
       
-      if (error.status === 429 && error.message.includes("Quota exceeded")) {
+      if (isRateLimit && error.message.includes("Quota exceeded")) {
         throw new Error("Cuota diaria de Gemini agotada (Límite: 20 peticiones/día). Por favor, espera 24h o usa otra API Key.");
       }
       

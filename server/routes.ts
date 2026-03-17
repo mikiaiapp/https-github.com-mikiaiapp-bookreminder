@@ -47,73 +47,8 @@ router.post("/analyze", authMiddleware, async (req: any, res) => {
     }
 
     db.prepare("INSERT INTO analysis_jobs (id, status, progress, content, book_id) VALUES (?, ?, ?, ?, ?)")
-      .run(jobId, 'processing', 0, content, bookId);
+      .run(jobId, 'pending', 0, content, bookId);
     
-    // Start analysis in background
-    (async () => {
-      try {
-        let accumulatedLogs = "";
-        
-        // Check if we can resume
-        const existingJob = db.prepare("SELECT * FROM analysis_jobs WHERE id = ?").get(jobId) as any;
-        const initialState = existingJob?.partial_result ? JSON.parse(existingJob.partial_result) : null;
-        const startChunk = existingJob?.last_chunk || 0;
-
-        const analysis = await analyzeBookBackend(content, (progress, message, partialData, lastChunk) => {
-          accumulatedLogs += (accumulatedLogs ? "\n" : "") + message;
-          db.prepare("UPDATE analysis_jobs SET progress = ?, message = ?, logs = ?, partial_result = ?, last_chunk = ? WHERE id = ?")
-            .run(progress, message, accumulatedLogs, partialData ? JSON.stringify(partialData) : null, lastChunk, jobId);
-          
-          // Also update the book if we have metadata
-          if (partialData && partialData.metadata) {
-            const m = partialData.metadata;
-            db.prepare(`
-              UPDATE books SET 
-                titulo = ?, autor = ?, isbn = ?, sinopsis = ?, 
-                biografia_autor = ?, bibliografia_autor = ?, datos_publicacion = ?,
-                resumen_capitulos = ?, resumen_detallado_capitulos = ?, analisis_personajes = ?, status = 'partial'
-              WHERE id = (SELECT book_id FROM analysis_jobs WHERE id = ?)
-            `).run(
-              m.titulo, m.autor, m.isbn, m.sinopsis, 
-              m.biografia_autor, m.bibliografia_autor, m.datos_publicacion,
-              partialData.resumen_capitulos || "", 
-              partialData.resumen_capitulos || "", // Use same for detailed during partial
-              partialData.notas_personajes || "",
-              jobId
-            );
-          }
-        }, initialState, startChunk);
-
-        db.prepare("UPDATE analysis_jobs SET status = ?, progress = 100, message = ?, logs = ?, result = ? WHERE id = ?")
-          .run('completed', 'Finalizado', accumulatedLogs + "\nFinalizado", JSON.stringify(analysis), jobId);
-        
-        // Final book update
-        db.prepare(`
-          UPDATE books SET 
-            titulo = ?, autor = ?, isbn = ?, sinopsis = ?, 
-            biografia_autor = ?, bibliografia_autor = ?, datos_publicacion = ?,
-            resumen_general = ?, resumen_detallado_capitulos = ?, resumen_capitulos = ?,
-            analisis_personajes = ?, evolucion_protagonista = ?, mermaid_code = ?,
-            guion_podcast_personajes = ?, guion_podcast_libro = ?, status = 'completed'
-          WHERE id = (SELECT book_id FROM analysis_jobs WHERE id = ?)
-        `).run(
-          analysis.titulo, analysis.autor, analysis.isbn, analysis.sinopsis,
-          analysis.biografia_autor, analysis.bibliografia_autor, analysis.datos_publicacion,
-          analysis.resumen_general, analysis.resumen_detallado_capitulos, analysis.resumen_capitulos,
-          analysis.analisis_personajes, analysis.evolucion_protagonista, analysis.mermaid_code,
-          analysis.guion_podcast_personajes, analysis.guion_podcast_libro,
-          jobId
-        );
-      } catch (err: any) {
-        console.error(`[Job ${jobId}] Error:`, err);
-        db.prepare("UPDATE analysis_jobs SET status = ?, error = ? WHERE id = ?").run('failed', err.message, jobId);
-        
-        // Mark book as partial/failed
-        db.prepare("UPDATE books SET status = 'partial' WHERE id = (SELECT book_id FROM analysis_jobs WHERE id = ?)")
-          .run(jobId);
-      }
-    })();
-
     res.json({ jobId, bookId });
   } catch (err: any) {
     console.error("[API /analyze] Error starting job:", err);
@@ -532,8 +467,12 @@ router.post("/books/:id/chapters/:chapterId/summarize", authMiddleware, async (r
 
     const result = await summarizeSpecificChapter(job.content, chapter.title);
     
+    if (!result || !result.resumen) {
+      throw new Error("No se pudo generar el resumen del capítulo. Intenta de nuevo.");
+    }
+
     db.prepare("UPDATE chapters SET summary = ?, character_notes = ? WHERE id = ?")
-      .run(result.resumen, result.notas_personajes, chapterId);
+      .run(result.resumen, result.notas_personajes || "", chapterId);
     
     // También actualizar el resumen detallado global del libro (concatenando)
     const allChapters = db.prepare("SELECT summary, character_notes FROM chapters WHERE book_id = ? AND summary IS NOT NULL ORDER BY order_index ASC").all(req.params.id) as any[];
