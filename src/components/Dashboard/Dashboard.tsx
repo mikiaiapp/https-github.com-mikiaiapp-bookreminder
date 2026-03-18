@@ -158,7 +158,7 @@ export default function Dashboard() {
         },
         body: JSON.stringify({ name })
       });
-      const newLib = await res.json();
+      const newLib = await safeFetchJson(res);
       setLibraries([...libraries, newLib]);
       setSelectedLibrary(newLib);
       setShowNewLibModal(false);
@@ -229,7 +229,10 @@ export default function Dashboard() {
         body: JSON.stringify({ content })
       });
 
-      if (!res.ok) throw new Error("Error al resumir el capítulo");
+      if (!res.ok) {
+        const data = await safeFetchJson(res);
+        throw new Error(data.error || "Error al resumir el capítulo");
+      }
 
       await fetchChapters(selectedBook.id);
       

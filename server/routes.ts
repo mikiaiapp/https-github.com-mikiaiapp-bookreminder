@@ -514,28 +514,31 @@ router.get("/books/:id/chapters", authMiddleware, (req: any, res) => {
 });
 
 router.post("/books/:id/chapters/:chapterId/summarize", authMiddleware, async (req: any, res) => {
-  const { bookId, chapterId } = req.params;
+  const bookId = req.params.id;
+  const chapterId = req.params.chapterId;
   const { content } = req.body;
   
   try {
     const chapter = db.prepare("SELECT * FROM chapters WHERE id = ?").get(chapterId) as any;
     if (!chapter) return res.status(404).json({ error: "Capítulo no encontrado" });
 
+    console.log(`[API /summarize] Summarizing chapter: ${chapter.title} (ID: ${chapterId}) for book: ${bookId}`);
     const result = await summarizeSpecificChapter(content, chapter.title);
     
     db.prepare("UPDATE chapters SET summary = ?, character_notes = ? WHERE id = ?")
       .run(result.resumen, result.notas_personajes, chapterId);
     
     // También actualizar el resumen detallado global del libro (concatenando)
-    const allChapters = db.prepare("SELECT summary, character_notes FROM chapters WHERE book_id = ? AND summary IS NOT NULL ORDER BY order_index ASC").all(req.params.id) as any[];
+    const allChapters = db.prepare("SELECT summary, character_notes FROM chapters WHERE book_id = ? AND summary IS NOT NULL ORDER BY order_index ASC").all(bookId) as any[];
     const fullSummary = allChapters.map(c => c.summary).join("\n\n");
     const allCharacterNotes = allChapters.map(c => c.character_notes).filter(n => n).join("\n\n");
     
     db.prepare("UPDATE books SET resumen_detallado_capitulos = ?, evolucion_protagonista = ? WHERE id = ?")
-      .run(fullSummary, allCharacterNotes, req.params.id);
+      .run(fullSummary, allCharacterNotes, bookId);
 
     res.json(result);
   } catch (err: any) {
+    console.error(`[API /summarize] Error:`, err);
     res.status(500).json({ error: err.message });
   }
 });

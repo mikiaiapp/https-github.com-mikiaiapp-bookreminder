@@ -220,13 +220,32 @@ export const detectChapters = async (content: string) => {
 export const summarizeSpecificChapter = async (content: string, chapterTitle: string) => {
   const safeContent = content || "";
   const ai = getAI();
-  // Usamos una ventana de contexto amplia para encontrar el capítulo
-  const prompt = `Busca el capítulo titulado "${chapterTitle}" en el libro y genera:
-  1. Un RESUMEN DETALLADO del capítulo (modo spoiler).
-  2. NOTAS DE PERSONAJES: Quién aparece, qué hace y si hay evolución.
   
-  CONTENIDO DEL LIBRO:
-  ${safeContent.substring(0, 2000000)}`; // 2M caracteres para cubrir libros más extensos
+  // Intentamos encontrar el índice del título del capítulo para centrar el contexto
+  let relevantContent = safeContent;
+  const titleIndex = safeContent.toLowerCase().indexOf(chapterTitle.toLowerCase());
+  
+  if (titleIndex !== -1) {
+    // Tomamos un fragmento alrededor del título (por ejemplo, 1M caracteres después)
+    relevantContent = safeContent.substring(titleIndex, titleIndex + 1000000);
+  } else {
+    // Si no lo encuentra exactamente, tomamos los primeros 2M como fallback
+    relevantContent = safeContent.substring(0, 2000000);
+  }
+
+  const prompt = `Analiza el capítulo titulado "${chapterTitle}" del libro proporcionado.
+  
+  TAREAS:
+  1. Genera un RESUMEN COMPLETO Y DETALLADO del capítulo. Incluye todos los spoilers y giros argumentales que ocurran en este capítulo específicamente. No te guardes nada.
+  2. Identifica todos los PERSONAJES que aparecen o son mencionados con relevancia en este capítulo.
+  3. Para cada personaje, describe qué hace en este capítulo, su estado emocional y cualquier indicio de evolución o cambio en su arco narrativo.
+  
+  REGLAS:
+  - Sé extremadamente detallado en el resumen.
+  - Las notas de personajes deben ser exhaustivas para permitir un análisis posterior de su evolución.
+  
+  CONTENIDO DEL LIBRO (Fragmento relevante):
+  ${relevantContent}`;
   
   return runAnalysis(ai, "gemini-3-flash-preview", prompt, `RESUMEN ${chapterTitle}`, {
     resumen: { type: Type.STRING },
